@@ -15,7 +15,7 @@
 # They are the only two devices in that 10.10.10.0/24 CIDR range (other than the gateway, of course).
 
 # Of note, I tried to build some "debug" functionality into it. If anything fails, it should
-# leave the lock file in place with some debug info/bin/rmation, as well as the stderr/stdout.
+# leave the lock file in place with some debug information, as well as the stderr/stdout.
 # Assuming you follow the installation instructions, you can find these at:
 # - /data/scripts/.captive-dns.sh.lock.${PID}
 # - /data/scripts/.captive-dns.sh.stderr.${PID}
