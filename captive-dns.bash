@@ -258,7 +258,6 @@ fi
 
 # Are we allowed to check for updates?
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
-	/bin/echo "Checking for updates..."
 	newest="$(/usr/bin/curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash" | /usr/bin/md5sum | /usr/bin/awk '{print $1}')"
 	current="$(/usr/bin/md5sum "${0}" | /usr/bin/awk '{print $1}')"
 	if ! [[ "${newest}" == "${current}" ]]; then
