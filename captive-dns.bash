@@ -118,19 +118,19 @@ done
 }
 
 testDNS () {
-echo "Testing DNS via ${1}"
+/bin/echo "Testing DNS via ${1}"
 if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
 	# Wait 5 seconds and try again, in case of timeout
 	sleep 5
 	if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
-		echo "DNS test via ${1} failed"
+		/bin/echo "DNS test via ${1} failed"
 		return 1
 	else
-		echo "DNS test via ${1} succeded"
+		/bin/echo "DNS test via ${1} succeded"
 		return 0
 	fi
 else
-	echo "DNS test via ${1} succeded"
+	/bin/echo "DNS test via ${1} succeded"
 	return 0
 fi
 }
@@ -258,8 +258,9 @@ esac
 source "${realPath%/*}/${scriptName%.bash}.env"
 
 # Is the internet reachable?
+/bin/echo "Verifying internet connectivity"
 if ! /bin/ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
-	/bin/echo "Internet appears to be offline."
+	/bin/echo "Internet appears to be offline"
     # It appears that it is not
     /bin/rm -f "${lockFile}"
     exit 0
@@ -270,7 +271,7 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
 	newest="$(/usr/bin/curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash" | /usr/bin/md5sum | /usr/bin/awk '{print $1}')"
 	current="$(/usr/bin/md5sum "${0}" | /usr/bin/awk '{print $1}')"
 	if ! [[ "${newest}" == "${current}" ]]; then
-		/bin/echo "A newer version is available."
+		/bin/echo "A newer version is available"
 	fi
 fi
 
