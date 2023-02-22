@@ -12,3 +12,4 @@ I will generally try and write in a `-h` or `--help` flag as well, that you can 
 
 Scripts here include:
 * `captive-dns.bash` - A script meant for the UniFi Dream Machine line, which can be used to force DNS to a specific DNS server. This can be useful to force devices which ignore the DNS server handed out by DHCP to use the DNS server of your choice, such as a Google Home. The script will run every minute to ensure your configured DNS server is actually working, and switch to backup option(s) if it is not.
+* `linode-dynamic-dns.bash` - A script meant to update a dynamic IP address via Linode's DNS manager. Rather than a packaged `.env.example` file, this one generates the `.env` file when run with the `-c` option.
