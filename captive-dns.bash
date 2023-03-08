@@ -298,7 +298,21 @@ if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     /bin/echo "Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
-
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
+    telegramOutput="$(/usr/bin/curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
+    curlExitCode="${?}"
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+    	/bin/echo "Curl to Telegram returned a non-zero exit code"
+        configFail="1"
+    elif [[ -z "${telegramOutput}" ]]; then
+    	/bin/echo "Curl to Telegram returned an empty string"
+        configFail="1"
+    fi
+    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+    	/bin/echo "Telegram API check failed"
+        configFail="1"
+    fi
+fi
 if [[ "${configFail}" -eq "1" ]]; then
     /bin/echo "Please fix config file: ${realPath%/*}/${scriptName%.bash}.env"
     /bin/rm -f "${lockFile}"
