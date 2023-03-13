@@ -7,6 +7,9 @@
 # being grabbed, it will send you one notification of everything instead of a thousand notifications
 # of individual files.
 
+# It is greatly improved over the previous version, as the logic has a much more efficient flow,
+# it is more bash-pure giving it greater compatability, and it utilizes Sonarr's v3 API.
+
 # If you run into any problems with me, create an issue on GitHub, or reach out via IRC in #goose
 # on Libera -- My response time should be less than 24 hours, and I'll help as best I can.
 
@@ -23,7 +26,7 @@
 
 # 1. Download the script .bash file to a persistently mounted directory within the container (/config/ is good)
 # 2. Download the script .env file to a persistently mounted directory within the container (/config/ is good)
-# 2. Set the script  as executable (chmod +x) and chown the script and .env files to the same UID/GID that Sonarr runs as
+# 2. Set the script as executable (chmod +x) and chown the script and .env files to the same UID/GID that Sonarr runs as
 # 4. Edit the .env file to your liking
 # 5. Set up a connection in Sonarr for a custom script:
 # 5a. You can name is whatever you want
@@ -39,7 +42,7 @@ if [[ -z "${BASH_VERSINFO}" || -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}"
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("curl" "jq" "mkdir" "printf" "rm" "sort")
+depArr=("awk" "curl" "jq" "md5sum" "mkdir" "printf" "rm" "sort")
 if ! [[ -e "/.dockerenv" ]]; then
     depArr+=("docker")
 fi
@@ -65,16 +68,17 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-# Used internally for debugging
-debugDir="${realPath%/*}/.${scriptName}.debug"
-mkdir -p "${debugDir}"
-exec 2> "${debugDir}/${$} $(date).debug"
-env
-set -x
-if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
-    source "${2}"
-    # Can pass test data with the -s flag (-s /path/to/file)
-fi
+# # Used internally for debugging
+# debugDir="${realPath%/*}/.${scriptName}.debug"
+# mkdir -p "${debugDir}"
+# exec 2> "${debugDir}/$(date).debug"
+# printenv
+# PS4='Line ${LINENO}: '
+# set -x
+# if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
+#     source "${2}"
+#     # Can pass test data with the -s flag (-s /path/to/file)
+# fi
 
 # We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
@@ -197,9 +201,9 @@ if [[ "${prevSeason}" -lt "10" ]]; then
 fi
 # If this is our first line out, we should name the show
 if [[ -z "${eventText}" ]]; then
-    eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")S${prevSeason} E${epOut} [${qualLine}]"
+    eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
 else
-    eventText="${eventText}$(printf "\r\n\r\n")S${prevSeason} E${epOut} [${qualLine}]"
+    eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
 fi
 unset numArr
 }
