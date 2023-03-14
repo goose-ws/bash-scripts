@@ -16,6 +16,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-03-14
+# Fixed padded zeroes for individual notifications
+# Fixed quality values not being cleared when processing a new season
+# Fixed grammatical reference to number of episodes if it is only one
 # 2023-03-12
 # Initial commit
 
@@ -201,11 +205,21 @@ if [[ "${prevSeason}" -lt "10" ]]; then
 fi
 # If this is our first line out, we should name the show
 if [[ -z "${eventText}" ]]; then
-    eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+    if [[ "${#numArr[@]}" -eq "1" ]]; then
+        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episode ${epOut} [${qualLine}]"
+    else
+        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+    fi
 else
-    eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+    if [[ "${#numArr[@]}" -eq "1" ]]; then
+        eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episode ${epOut} [${qualLine}]"
+    else
+        eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+    fi
 fi
 unset numArr
+unset qualityArr
+unset uniq_qualityArr
 }
 buildArray () {
 numArr+=("${episodeArr[${n}]}")
@@ -290,10 +304,10 @@ sendSingleNotification () {
 # 5 - Episode digit
 # 6 - Quality
 # Pad the episode with a zero if necessary
-if [[ "${4}" -le "0" ]] && [[ "${4:0:1}" ]]; then
+if [[ "${4}" -le "0" ]]; then
     set 4="0${4}"
 fi
-if [[ "${5}" -le "0" ]] && [[ "${5:0:1}" ]]; then
+if [[ "${5}" -le "0" ]]; then
     set 5="0${5}"
 fi
 eventText="<b>Episode Downloaded</b>$(printf "\r\n\r\n")${2} - S${4} E${5}: ${3} [${6}]"
