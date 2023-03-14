@@ -26,11 +26,14 @@
 #############################
 ##       Installation      ##
 #############################
-# This script was only built to work with the LinuxServer Docker image of Sonarr.
-
+# Non-Docker:
+# 1. Download the script .bash file somewhere safe
+# 2. Download the script .env file somewhere safe
+# Docker:
 # 1. Download the script .bash file to a persistently mounted directory within the container (/config/ is good)
 # 2. Download the script .env file to a persistently mounted directory within the container (/config/ is good)
-# 2. Set the script as executable (chmod +x) and chown the script and .env files to the same UID/GID that Sonarr runs as
+
+# 3. Set the script as executable (chmod +x) and chown the script and .env files to the same UID/GID that Sonarr runs as
 # 4. Edit the .env file to your liking
 # 5. Set up a connection in Sonarr for a custom script:
 # 5a. You can name is whatever you want
