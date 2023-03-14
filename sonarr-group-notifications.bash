@@ -72,17 +72,17 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-# # Used internally for debugging
-# debugDir="${realPath%/*}/.${scriptName}.debug"
-# mkdir -p "${debugDir}"
-# exec 2> "${debugDir}/$(date).debug"
-# printenv
-# PS4='Line ${LINENO}: '
-# set -x
-# if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
-#     source "${2}"
-#     # Can pass test data with the -s flag (-s /path/to/file)
-# fi
+# Used internally for debugging
+debugDir="${realPath%/*}/.${scriptName}.debug"
+mkdir -p "${debugDir}"
+exec 2> "${debugDir}/$(date).debug"
+printenv
+PS4='Line ${LINENO}: '
+set -x
+if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
+    source "${2}"
+    # Can pass test data with the -s flag (-s /path/to/file)
+fi
 
 # We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
@@ -196,25 +196,26 @@ fi
 # A very bad human. And I repent for my sins committed here.
 # TODO: Find a way to quote this variable but still pass each item of the array as a separate positional parameter
 list2range ${numArr[@]};
-if [[ "${prevSeason}" -lt "10" ]]; then
+announceSeason="${prevSeason}"
+if [[ "${announceSeason}" -lt "10" ]]; then
     if [[ "${n}" -eq "$(( ${#seasonArr[@]} - 1 ))" ]]; then
-        prevSeason="${i}"
+        announceSeason="${i}"
     fi
     # Pad with zero
-    prevSeason="0${prevSeason}"
+    announceSeason="0${announceSeason}"
 fi
 # If this is our first line out, we should name the show
 if [[ -z "${eventText}" ]]; then
     if [[ "${#numArr[@]}" -eq "1" ]]; then
-        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episode ${epOut} [${qualLine}]"
+        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${announceSeason} Episode ${epOut} [${qualLine}]"
     else
-        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+        eventText="<b>Multiple Episodes Downloaded</b>$(printf "\r\n\r\n")${sonarr_series_title}$(printf "\r\n\r\n")Season ${announceSeason} Episodes ${epOut} [${qualLine}]"
     fi
 else
     if [[ "${#numArr[@]}" -eq "1" ]]; then
-        eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episode ${epOut} [${qualLine}]"
+        eventText="${eventText}$(printf "\r\n\r\n")Season ${announceSeason} Episode ${epOut} [${qualLine}]"
     else
-        eventText="${eventText}$(printf "\r\n\r\n")Season ${prevSeason} Episodes ${epOut} [${qualLine}]"
+        eventText="${eventText}$(printf "\r\n\r\n")Season ${announceSeason} Episodes ${epOut} [${qualLine}]"
     fi
 fi
 unset numArr
@@ -293,7 +294,9 @@ else
     fi
 fi
 # And finally, clean out that old notes file
-rm -f "${notesFile}"
+# rm -f "${notesFile}"
+# For debug purposes, keep the old notes file
+mv "${notesFile}" "${notesFile}.debug"
 }
 
 sendSingleNotification () {
@@ -330,25 +333,30 @@ source "${realPath%/*}/${scriptName%.bash}.env"
 
 # Sanity checks
 # First let's get the IP address of the container so we can interface with its API
-# If we're inside of docker, we can use localhost
-if [[ -e "/.dockerenv" ]]; then
-    sonarrIp="127.0.0.1"
-else
-    sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrContainerName}")"
-    if [[ -z "${sonarrIp}" ]]; then
-        # IP address returned blank. Is it being networked through another container?
-        sonarrIp="$(docker inspect "${sonarrContainerName}" | jq ".[].HostConfig.NetworkMode")"
-        sonarrIp="${sonarrIp#\"}"
-        sonarrIp="${sonarrIp%\"}"
-        if [[ "${sonarrIp%%:*}" == "container" ]]; then
-            # Networking is being run through another container. So we need that container's IP address.
-            sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrIp#container:}")"
-        else
-            unset sonarrIp
-        fi
-    fi
+# If the variable is not an IP address, it should be a docker container name.
+inDocker="0"
+if ! [[ "${sonarrIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+	inDocker="1"
+	# If we're inside of docker, we can use localhost
+	if [[ -e "/.dockerenv" ]]; then
+		sonarrIp="127.0.0.1"
+	else
+		sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrContainerName}")"
+		if [[ -z "${sonarrIp}" ]]; then
+			# IP address returned blank. Is it being networked through another container?
+			sonarrIp="$(docker inspect "${sonarrContainerName}" | jq ".[].HostConfig.NetworkMode")"
+			sonarrIp="${sonarrIp#\"}"
+			sonarrIp="${sonarrIp%\"}"
+			if [[ "${sonarrIp%%:*}" == "container" ]]; then
+				# Networking is being run through another container. So we need that container's IP address.
+				sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrIp#container:}")"
+			else
+				unset sonarrIp
+			fi
+		fi
+	fi
 fi
-if [[ -z "${sonarrIp}" ]]; then
+if [[ -z "${sonarrIp}" ]] || ! [[ "${sonarrIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
     badExit "1" "Unable to determine sonarr IP address";
 fi
 
@@ -358,9 +366,12 @@ if [[ -e "/.dockerenv" ]]; then
         configArr+=("${i}")
     done < "/config/config.xml"
 else
-    while read -r i; do
-        configArr+=("${i}")
-    done < <(docker exec "${sonarrContainerName}" cat /config/config.xml)
+	if [[ "${inDocker}" -eq "1" ]]; then
+		sonarrConfig="/config/config.xml"
+	fi
+	while read -r i; do
+		configArr+=("${i}")
+	done < <(docker exec "${sonarrContainerName}" cat "${sonarrConfig}")
 fi
 if [[ "${#configArr[@]}" -eq "0" ]]; then
     badExit "2" "Unable to read Sonarr config file";
@@ -409,7 +420,7 @@ fi
 if [[ -z "${sonarrApiKey}" ]]; then
     badExit "6" "Unable to determine Sonarr API key";
 fi
-sonarrAddress="${sonarrScheme}://${sonarrIp}:${sonarrPort}${sonarrBase}"
+sonarrHttpAddress="${sonarrScheme}://${sonarrIp}:${sonarrPort}${sonarrBase}"
 
 # Can we check for updates?
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
@@ -463,7 +474,7 @@ if [[ "${1,,}" == "--test" ]] || [[ "${1,,}" == "-t" ]] || [[ "${sonarr_eventtyp
     fi
     # Let's test to make sure our API is working
 
-    apiTest="$(curl -skL -H "X-Api-Key: ${sonarrApiKey}" "${sonarrAddress}/api/v3/system/status" | jq ".appName")"
+    apiTest="$(curl -skL -H "X-Api-Key: ${sonarrApiKey}" "${sonarrHttpAddress}/api/v3/system/status" | jq ".appName")"
     apiTest="${apiTest//\"/}"
     if ! [[ "${apiTest}" == "Sonarr" ]]; then
         badExit "15" "API test failed";
@@ -503,7 +514,7 @@ fi
 # Our data looks good, so let's finally process it.
 # Given the above debug information, we should check the queue to see if anything else of this series ID is downloading
 # Load the details of the queue into a variable
-queueDetails="$(curl -skL -H "X-Api-Key: ${sonarrApiKey}" "${sonarrAddress}/api/v3/queue/details")"
+queueDetails="$(curl -skL -H "X-Api-Key: ${sonarrApiKey}" "${sonarrHttpAddress}/api/v3/queue/details")"
 numSeriesItems="0"
 numItems="$(( "$(jq length <<<"${queueDetails}")" - 1 ))"
 i="0"
