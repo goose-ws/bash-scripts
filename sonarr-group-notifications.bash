@@ -75,17 +75,17 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-# Used internally for debugging
-debugDir="${realPath%/*}/.${scriptName}.debug"
-mkdir -p "${debugDir}"
-exec 2> "${debugDir}/$(date).debug"
-printenv
-PS4='Line ${LINENO}: '
-set -x
-if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
-    source "${2}"
-    # Can pass test data with the -s flag (-s /path/to/file)
-fi
+# # Used internally for debugging
+# debugDir="${realPath%/*}/.${scriptName}.debug"
+# mkdir -p "${debugDir}"
+# exec 2> "${debugDir}/$(date).debug"
+# printenv
+# PS4='Line ${LINENO}: '
+# set -x
+# if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
+    # source "${2}"
+    # # Can pass test data with the -s flag (-s /path/to/file)
+# fi
 
 # We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
@@ -297,9 +297,9 @@ else
     fi
 fi
 # And finally, clean out that old notes file
-# rm -f "${notesFile}"
+rm -f "${notesFile}"
 # For debug purposes, keep the old notes file
-mv "${notesFile}" "${notesFile}.debug"
+#mv "${notesFile}" "${notesFile}.debug"
 }
 
 sendSingleNotification () {
@@ -310,10 +310,10 @@ sendSingleNotification () {
 # 5 - Episode digit
 # 6 - Quality
 # Pad the episode with a zero if necessary
-if [[ "${4}" -le "0" ]]; then
+if [[ "${4}" -le "10" ]]; then
     set 4="0${4}"
 fi
-if [[ "${5}" -le "0" ]]; then
+if [[ "${5}" -le "10" ]]; then
     set 5="0${5}"
 fi
 eventText="<b>Episode Downloaded</b>$(printf "\r\n\r\n")${2} - S${4} E${5}: ${3} [${6}]"
@@ -339,25 +339,25 @@ source "${realPath%/*}/${scriptName%.bash}.env"
 # If the variable is not an IP address, it should be a docker container name.
 inDocker="0"
 if ! [[ "${sonarrIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-	inDocker="1"
-	# If we're inside of docker, we can use localhost
-	if [[ -e "/.dockerenv" ]]; then
-		sonarrIp="127.0.0.1"
-	else
-		sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrContainerName}")"
-		if [[ -z "${sonarrIp}" ]]; then
-			# IP address returned blank. Is it being networked through another container?
-			sonarrIp="$(docker inspect "${sonarrContainerName}" | jq ".[].HostConfig.NetworkMode")"
-			sonarrIp="${sonarrIp#\"}"
-			sonarrIp="${sonarrIp%\"}"
-			if [[ "${sonarrIp%%:*}" == "container" ]]; then
-				# Networking is being run through another container. So we need that container's IP address.
-				sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrIp#container:}")"
-			else
-				unset sonarrIp
-			fi
-		fi
-	fi
+    inDocker="1"
+    # If we're inside of docker, we can use localhost
+    if [[ -e "/.dockerenv" ]]; then
+        sonarrIp="127.0.0.1"
+    else
+        sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrContainerName}")"
+        if [[ -z "${sonarrIp}" ]]; then
+            # IP address returned blank. Is it being networked through another container?
+            sonarrIp="$(docker inspect "${sonarrContainerName}" | jq ".[].HostConfig.NetworkMode")"
+            sonarrIp="${sonarrIp#\"}"
+            sonarrIp="${sonarrIp%\"}"
+            if [[ "${sonarrIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+                sonarrIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${sonarrIp#container:}")"
+            else
+                unset sonarrIp
+            fi
+        fi
+    fi
 fi
 if [[ -z "${sonarrIp}" ]] || ! [[ "${sonarrIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
     badExit "1" "Unable to determine sonarr IP address";
@@ -369,12 +369,12 @@ if [[ -e "/.dockerenv" ]]; then
         configArr+=("${i}")
     done < "/config/config.xml"
 else
-	if [[ "${inDocker}" -eq "1" ]]; then
-		sonarrConfig="/config/config.xml"
-	fi
-	while read -r i; do
-		configArr+=("${i}")
-	done < <(docker exec "${sonarrContainerName}" cat "${sonarrConfig}")
+    if [[ "${inDocker}" -eq "1" ]]; then
+        sonarrConfig="/config/config.xml"
+    fi
+    while read -r i; do
+        configArr+=("${i}")
+    done < <(docker exec "${sonarrContainerName}" cat "${sonarrConfig}")
 fi
 if [[ "${#configArr[@]}" -eq "0" ]]; then
     badExit "2" "Unable to read Sonarr config file";
