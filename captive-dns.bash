@@ -52,7 +52,7 @@ if [[ -z "${BASH_VERSINFO}" || -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}"
     /bin/echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("/usr/bin/awk" "/bin/cp" "/usr/bin/curl" "/bin/date" "/bin/echo" "/bin/grep" "/usr/bin/host" "/usr/bin/md5sum" "/bin/mv" "/bin/pwd" "/bin/rm" "/sbin/iptables" "/usr/bin/sort")
+depArr=("/usr/bin/awk" "/bin/cp" "/usr/bin/curl" "/bin/date" "/bin/echo" "/bin/grep" "/usr/bin/host" "/usr/bin/md5sum" "/bin/mv" "/bin/pwd" "/bin/rm" "/usr/sbin/iptables" "/usr/bin/sort")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
@@ -95,8 +95,8 @@ fi
 removeRules () {
 while read -r i; do
     /bin/echo "Removing iptables NAT rule ${i}"
-    /sbin/iptables -t nat -D PREROUTING "${i}"
-done < <(/sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /usr/bin/awk '{print $1}' | /usr/bin/sort -nr)
+    /usr/sbin/iptables -t nat -D PREROUTING "${i}"
+done < <(/usr/sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /usr/bin/awk '{print $1}' | /usr/bin/sort -nr)
 }
 
 addRules () {
@@ -113,7 +113,7 @@ fi
 # Should be passed as: addRules "IP address you want redirected to" "IP address or CIDR range allowed"
 for intfc in "${vlanInterfaces[@]}"; do
     /bin/echo "Forcing interface ${intfc} to ${1}:${dnsPort}"
-    /sbin/iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
+    /usr/sbin/iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
 done
 }
 
@@ -219,7 +219,7 @@ case "${1,,}" in
         exit 0
     ;;
     "-r"|"--rules")
-        /sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
+        /usr/sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
         /bin/rm -f "${lockFile}"
         exit 0
     ;;
@@ -352,7 +352,7 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
 fi
 
 # We read this into an array as a cheap way of counting the number of results. It should only be zero or one.
-readarray -t captiveDNS < <(/sbin/iptables -n -t nat --list PREROUTING | /bin/grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /bin/grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | /usr/bin/sort -u)
+readarray -t captiveDNS < <(/usr/sbin/iptables -n -t nat --list PREROUTING | /bin/grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /bin/grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | /usr/bin/sort -u)
 if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     # No rules are set
     if testDNS "${primaryDNS}"; then
