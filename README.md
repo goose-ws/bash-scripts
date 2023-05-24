@@ -4,7 +4,7 @@ This is a collection of bash scripts I've hacked together over time which may be
 
 I have a moderate amount of skill in bash. I am no expert, but I am no novice either. There may be better ways to execute the flow of logic I am trying to achieve in these scripts. If you have a suggestion, I would welcome a pull request. If you have an issue, you are welcome to create an Issue or reach out to me on IRC. I idle in #goose on Libera, and usually respond within a few hours of being highlighted.
 
-Unless otherwise noted, all scripts in this repository are covered by the [BSD 3 liencse](https://github.com/goose-ws/bash-scripts/blob/main/LICENSE)
+Unless otherwise noted, all scripts in this repository are covered by the [MIT liencse](https://github.com/goose-ws/bash-scripts/blob/main/LICENSE)
 
 These scripts will generally work by sourcing the "Config" options to a `.env` file with the same base file name, and kept in the same directory. So for example, if you want to use the `captive-dns.bash` script, you will need to place `captive-dns.env` in the same directory next to it. The config file names are dynamic to the script file name. So if you wanted to rename `captive-dns.bash` to `force-dns.bash`, then your config file would need to be `force-dns.env` in the same directory.
 
