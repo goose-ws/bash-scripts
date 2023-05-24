@@ -126,6 +126,18 @@ if [[ -z "${plexContainerName}" ]]; then
     echo "Please specify a 'plexContainerName=\"\"'"
     varFail="1"
 fi
+if [[ -z "${plexIp}" ]]; then
+    if [[ ${verboseLogging} == "True" ]]; then echo "plexIp ENV not supplied, will attempt retrieving from Docker Container ${plexContainerName}"; fi
+    getIpFromDocker="True"
+elif ! [[ "${plexIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    echo "Please specify a valid plexIp x.x.x.x, or leave blank 'plexIP=\"${plexIp}\"'"
+    varFail="1"
+elif [[ $(ping -c 1 ${plexIp}; echo $?) == 1 ]]; then
+    echo "${plexIp} is unreachable, please specify a reachable Plex IP"
+    varFail="1"
+else
+    if [[ ${verboseLogging} == "True" ]]; then echo "${plexIp} is reachable on your network"; fi
+fi
 if [[ -z "${plexVersion}" ]]; then
     echo "Please specify a 'plexVersion=\"\"'"
     varFail="1"
@@ -135,6 +147,7 @@ else
         varFail="1"
     fi
 fi
+
 # TODO: Automate this variable via 'uname'
 if [[ -z "${hostOS}" ]]; then
     echo "Please specify a 'hostOS=\"\"'"
@@ -181,26 +194,29 @@ fi
 
 ### Build variable ${plexServerAddress} here
 # Get the IP address of the Plex container
-plexIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${plexContainerName}")"
-if [[ -z "${plexIp}" ]]; then
-	# IP address returned blank. Is it being networked through another container?
-	plexIp="$(docker inspect "${plexContainerName}" | jq ".[].HostConfig.NetworkMode")"
-	plexIp="${plexIp#\"}"
-	plexIp="${plexIp%\"}"
-	if [[ "${plexIp%%:*}" == "container" ]]; then
-		# Networking is being run through another container. So we need that container's IP address.
-		plexIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${plexIp#container:}")"
+if [[ "${getIpFromDocker}" == "True" ]]; then
+	dockerIp="$(docker inspect "${plexContainerName}" | jq ".[].HostConfig.NetworkMode")"
+	dockerIp="${dockerIp#\"}"
+	dockerIp="${dockerIp%\"}"
+	if [[ "${dockerIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+		dockerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${dockerIp#container:}")"
 	else
-		unset plexIp
+		unset dockerIp
+		dockerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${plexContainerName}")"
 	fi
-fi
-if [[ -z "${plexIp}" ]] || ! [[ "${plexIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    badExit "2" "Unable to determine PMS IP address";
+        if ! [[ "${dockerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+            echo "Got Bad Plex IP Docker inspect: ${dockerIp}"
+            badExit "2" "Unable to determine PMS IP address, try specifying directly in .env with plexIp=\"x.x.x.x.\"";
+        else
+	    if [[ ${verboseLogging} == "True" ]]; then echo "Successfully grabed the IP ${dockerIp} from Docker"; fi
+            plexIp=dockerIp
+        fi
 fi
 
 # We can assume the scheme is http and port is 32400 unless someone reports otherwise
-plexScheme="http"
-plexPort="32400"
+plexScheme="${plexScheme:=http}"
+plexPort="${plexPort:=32400}"
 
 # Build our address
 plexAdd="${plexScheme}://${plexIp}:${plexPort}"
@@ -228,11 +244,14 @@ currVer="$(jq ".computer.${hostOS}.version" <<<"${currVer}")"
 currVer="${currVer#\"}"
 currVer="${currVer%\"}"
 if [[ "${currVer}" == "null" ]] || [[ -z "${currVer}" ]]; then
-    badExit "6" "Unable to parse latest version"
+    badExit "6" "Unable to parse latest version";
 fi
 
+if [[ ${verboseLogging} == "True" ]]; then echo "My Version: ${myVer} <> Current Version: ${currVer}"; fi
+
 if [[ "${myVer}" == "${currVer}" ]]; then
-	cleanExit;
+	if [[ ${verboseLogging} == "True" ]]; then echo "Versions match, no need for update"; fi
+        cleanExit;
 fi
 
 # If we've gotten this far, version strings do not match
@@ -241,7 +260,7 @@ myVer2="${myVer2//./}"
 currVer2="${currVer%-*}"
 currVer2="${currVer2//./}"
 if [[ "${myVer2}" -gt "${currVer2}" ]]; then
-    # We already have a version more recent than the current, probably a beta/Plex Pass version
+    if [[ ${verboseLogging} == "True" ]]; then echo "We already have a version more recent (${myVer}) than the current (${currVer}), probably a beta/Plex Pass version"; fi
     cleanExit;
 fi
 
@@ -249,8 +268,8 @@ fi
 getNowPlaying;
 
 if [[ "${nowPlaying}" -ne "0" ]]; then
-    # At least one person is watching something
-    # We'll try again at the next cron run
+    if [[ ${verboseLogging} == "True" ]]; then echo "At least one person is watching something"; fi
+    if [[ ${verboseLogging} == "True" ]]; then echo "We'll try again at the next cron run"; fi
 	cleanExit;
 fi
 
@@ -261,12 +280,12 @@ sleep 60
 getNowPlaying;
 
 if [[ "${nowPlaying}" -ne "0" ]]; then
-    # At least one person is watching something
-    # We'll try again at the next cron run
+    if [[ ${verboseLogging} == "True" ]]; then echo "At least one person is still watching something"; fi
+    if [[ ${verboseLogging} == "True" ]]; then echo "We'll try again at the next cron run"; fi
 	cleanExit;
 fi
 
-# Nice, nobody's watching anything. Let's restart the Docker container.
+if [[ ${verboseLogging} == "True" ]]; then echo "Nice, nobody's watching anything. Let's restart the Docker container."; fi
 # Get the Docker container ID
 docker stop "${plexContainerName}"
 
