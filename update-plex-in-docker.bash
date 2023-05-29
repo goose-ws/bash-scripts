@@ -30,7 +30,7 @@
 ### Begin source, please don't edit below here. ###
 ###################################################
 
-if [[ -z "${BASH_VERSINFO[0]}" || -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
+if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
