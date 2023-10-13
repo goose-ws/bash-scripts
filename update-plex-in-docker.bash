@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 
 #############################
+##         Issues          ##
+#############################
+# If you experience any issues, please let me know here:
+# https://github.com/goose-ws/bash-scripts
+# These scripts are purely a passion project of convenience for myself, so pull requests welcome :)
+
+#############################
 ##          About          ##
 #############################
 # This script serves to update instaces of Plex running in docker containers. If you are using the official Plex image
@@ -11,6 +18,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-10-13
+# Updated some spacing, and modified telegram send message command to allow for multiple channels
+# Added a disclaimer for where to file issues above the "About" section
 # 2023-05-25
 # Added functionality to self determine container IP address
 # Added config options for verbosity
@@ -57,7 +67,7 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-# # Used internally for debugging
+## Used internally for debugging
 # debugDir="${realPath%/*}/.${scriptName}.debug"
 # mkdir -p "${debugDir}"
 # exec 2> "${debugDir}/$(date).debug"
@@ -143,22 +153,24 @@ else
     fi
 fi
 eventText="$(printf "<b>Plex Update for ${dockerHost%%.*}</b>\r\n\r\nPlex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>")"
-telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${telegramChannelId}&parse_mode=html" 2>&1)"
-curlExitCode="${?}"
-if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
-else
-    printOutput "3" "Curl returned zero exit code"
-    # Check to make sure Telegram returned a true value for ok
-    if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
-        printOutput "1" "Failed to send Telegram message:"
-        printOutput "1" ""
-        printOutput "1" "$(jq <<<"${telegramOutput}")"
-        printOutput "1" ""
+for chanId in "${telegramChannelId[@]}"; do
+    telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+    curlExitCode="${?}"
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+        badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
     else
-        printOutput "2" "Telegram message sent successfully"
+        printOutput "3" "Curl returned zero exit code"
+        # Check to make sure Telegram returned a true value for ok
+        if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+            printOutput "1" "Failed to send Telegram message:"
+            printOutput "1" ""
+            printOutput "1" "$(jq . <<<"${telegramOutput}")"
+            printOutput "1" ""
+        else
+            printOutput "2" "Telegram message sent to channel ${chanId} successfully"
+        fi
     fi
-fi
+done
 }
 
 function getNowPlaying {
