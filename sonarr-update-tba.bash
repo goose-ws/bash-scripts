@@ -477,7 +477,7 @@ for file in "${files[@]}"; do
                 newEpName="[null]"
             fi
             msgArr+=("Renamed ${epCode} to: <i>${newEpName}</i>")
-            printOutput "2" "Renamed ${epCode} to: ${newEpName}"
+            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
