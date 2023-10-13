@@ -476,7 +476,7 @@ for file in "${files[@]}"; do
             if [[ -z "${newEpName}" ]]; then
                 newEpName="[null]"
             fi
-            msgArr+=("Renamed ${epCode} to: <i>${newEpName}</i>")
+            msgArr+=("Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
             printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
