@@ -1,2 +1,4 @@
 # Ignore prod .env files
 *.env
+# Ignore .bak files
+*.bak
