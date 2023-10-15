@@ -94,7 +94,16 @@ case "${1,,}" in
     ;;
 esac
 
-echo "${$}" >> "${lockFile}"
+if [[ -e "${lockFile}" ]]; then
+exit 0
+else
+echo "PID: ${$}
+PWD: $(/bin/pwd)
+Date: $(/bin/date)
+RealPath: ${realPath}
+\${@}: ${@}
+\${#@}: ${#@}" > "${lockFile}"
+fi
 
 # Define some functions
 function printOutput {
@@ -407,3 +416,5 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
     printOutput "2" "Telegram messaging enabled -- Checking credentials"
     sendTelegramMessage
 fi
+
+cleanExit
