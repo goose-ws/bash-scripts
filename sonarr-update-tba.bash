@@ -45,6 +45,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-10-15
+# Better logic for how to determine root folder and series folder (Thanks for the issue @Hannah-GBS)
+# Added the check for lockfile to prevent concurrent runs
+# Added a few stops to make sure we should continue along the way
 # 2023-10-13
 # Rewrite of old script, removal of old script, and initial commit of new script
 
@@ -114,7 +118,16 @@ case "${1,,}" in
     ;;
 esac
 
-echo "${$}" >> "${lockFile}"
+if [[ -e "${lockFile}" ]]; then
+exit 0
+else
+echo "PID: ${$}
+PWD: $(/bin/pwd)
+Date: $(/bin/date)
+RealPath: ${realPath}
+\${@}: ${@}
+\${#@}: ${#@}" > "${lockFile}"
+fi
 
 # Define some functions
 function printOutput {
@@ -256,7 +269,7 @@ if [[ -z "${containerIp}" ]]; then
 fi
 
 # Read Sonarr config file
-sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml)"
+sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
 if [[ -z "${sonarrConfig}" ]]; then
     badExit "10" "Failed to read Sonarr config file"
 else
@@ -341,146 +354,157 @@ fi
 # Search each library for files containing "* TBA *" in the title
 for i in "${libraryArr[@]}"; do
     printOutput "2" "Checking for TBA items in ${i}"
+    matches="0"
     while read -r ii; do
         printOutput "3" "Found item: ${ii}"
-        files+=("${ii}")
+        files+=("${i}:${ii}")
+        (( matches++ ))
     done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r')
+    printOutput "2" "Detected ${matches} TBA items"
 done
-printOutput "2" "Detected ${#files[@]} TBA items"
 
 # If the array of files matching the search pattern is not empty, iterate through them
 for file in "${files[@]}"; do
+    library="${file%%:*}"
+    file="${file#*:}"
+    printOutput "3" "Library: ${library}"
+    printOutput "3" "File: ${file}"
+    printOutput "2" "Processing ${file##*/}"
     printOutput "3" "Verifying file has not already been renamed"
-    if [[ "${#file}" -ne "0" ]]; then
-        # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
-        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
-        fileExists="0"
-        for i in "${dirContents[@]}"; do
-            i="${i#\'}"
-            i="${i%\'}"
-            if [[ "${i}" == "${file##*/}" ]]; then
-                printOutput "3" "Filename unchanged"
-                fileExists="1"
-            fi
-        done
-        if [[ "${fileExists}" -eq "1" ]]; then
-            printOutput "2" "Initiating series rename command"
-            # Find the series ID by searching for a series with the matching path
-            # First we have to extract ${seriesPath} from ${file}
-            # Get the root folder
-            rootFolder="${file#/}"
-            rootFolder="${rootFolder%%/*}"
-            printOutput "3" "Determined root folder: ${rootFolder}"
-            # Next get the series folder
-            seriesFolder="${file#/"${rootFolder}"/}"
-            seriesFolder="${seriesFolder%%/*}"
-            printOutput "3" "Determined series folder: ${seriesFolder}"
-            # Build the series path
-            seriesPath="/${rootFolder}/${seriesFolder}"
-            printOutput "3" "Built series path: ${seriesPath}"
-            # Find the series which matches the path
-            series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
+    # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
+    fileExists="0"
+    readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
+    for i in "${dirContents[@]}"; do
+        i="${i#\'}"
+        i="${i%\'}"
+        if [[ "${i}" == "${file##*/}" ]]; then
+            printOutput "3" "Filename unchanged"
+            fileExists="1"
+        fi
+    done
+    if [[ "${fileExists}" -eq "1" ]]; then
+        printOutput "2" "Initiating series rename command"
+        # Find the series ID by searching for a series with the matching path
+        # First we have to extract ${seriesPath} from ${file}
+        # Get the root folder
+        #rootFolder="${file#/}"
+        #rootFolder="${rootFolder%%/*}"
+        rootFolder="${library}"
+        printOutput "3" "Determined root folder: ${rootFolder}"
+        # Next get the series folder
+        seriesFolder="${file#${rootFolder}/}"
+        seriesFolder="${seriesFolder%%/*}"
+        printOutput "3" "Determined series folder: ${seriesFolder}"
+        # Build the series path
+        seriesPath="${rootFolder}/${seriesFolder}"
+        printOutput "3" "Built series path: ${seriesPath}"
+        # Find the series which matches the path
+        series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
+        if [[ -n "${series}" ]]; then
             printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
-            
-            # Get the title of the series
-            seriesTitle="$(jq -M -r ".title" <<<"${series}")"
-            
-            # Get the series ID for the series
-            seriesId="$(jq -M -r ".id" <<<"${series}")"
-            printOutput "3" "Determined series ID: ${seriesId}"
-
-            # Ensure we only matched one series
-            if [[ "$(wc -l <<<"${seriesId}")" -eq "0" ]]; then
-                badExit "16" "Failed to match series ID for file: ${file}"
-            elif [[ "$(wc -l <<<"${seriesId}")" -gt "1" ]]; then
-                badExit "17" "More than one matched series ID for file: ${file}"
-            else
-                printOutput "3" "Matched series ID for file"
-            fi
-
-            # Refresh the series
-            printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
-            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-            printOutput "3" "Command ID: ${commandId}"
-
-            # Give refresh a second to process
-            sleep 1
-            
-            # Check the command status queue to see if the command is done
-            printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            while [[ -n "${commandStatus}" ]]; do
-                printOutput "2" "Command status ${debug}: ${commandStatus,,}"
-                if [[ "${commandStatus,,}" == "completed" ]]; then
-                    break
-                fi
-                sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            done
-            if [[ -z "${commandStatus}" ]]; then
-                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                sleep 15
-            fi
-
-            # Rename the series
-            printOutput "2" "Issuing rename command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId}]}" -H "Content-Type: application/json" -X POST 2>&1)"
-            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-            printOutput "3" "Command ID: ${commandId}"
-
-            # Give rename a second to process
-            sleep 1
-            
-            # Check the command status queue to see if the command is done
-            printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            while [[ -n "${commandStatus}" ]]; do
-                printOutput "2" "Command status: ${commandStatus,,}"
-                if [[ "${commandStatus,,}" == "completed" ]]; then
-                    break
-                fi
-                sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            done
-            if [[ -z "${commandStatus}" ]]; then
-                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                sleep 15
-            fi
-            
-        fi
-        # Check to see if rename happenedreadarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}")
-        printOutput "3" "Verifying file rename status"
-        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
-        fileExists="0"
-        for i in "${dirContents[@]}"; do
-            i="${i#\'}"
-            i="${i%\'}"
-            if [[ "${i}" == "${file##*/}" ]]; then
-                printOutput "3" "Matched '${i}' to '${file##*/}'"
-                fileExists="1"
-            fi
-        done
-        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-        epCode="${epCode// - /}"
-        if [[ "${fileExists}" -eq "0" ]]; then
-            newEpName="$(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r' | grep -F "${epCode}")"
-            newEpName="${newEpName##${seriesPath} - ${epCode} - }"
-            newEpName="${newEpName%%[*}"
-            newEpName="${newEpName%% }"
-            # In case the episode name is an illegal file name, such as The Changeling S01E03.
-            if [[ -z "${newEpName}" ]]; then
-                newEpName="[null]"
-            fi
-            msgArr+=("Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
-            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
         else
-            printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
+            badExit "99" "Unable to determine series"
         fi
+        # Get the title of the series
+        seriesTitle="$(jq -M -r ".title" <<<"${series}")"
+        
+        # Get the series ID for the series
+        readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
+        if [[ -n "${series}" ]]; then
+            printOutput "3" "Determined series ID: ${seriesId}"
+        else
+            badExit "99" "Unable to determine series ID"
+        fi
+
+        # Ensure we only matched one series
+        if [[ "${#seriesId[@]}" -eq "0" ]]; then
+            badExit "16" "Failed to match series ID for file: ${file}"
+        elif [[ "${#seriesId[@]}" -ge "2" ]]; then
+            badExit "17" "More than one matched series ID for file: ${file}"
+        fi
+
+        # Refresh the series
+        printOutput "2" "Issuing refresh command for: ${seriesTitle}"
+        commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
+        commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+        printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+        printOutput "3" "Command ID: ${commandId}"
+
+        # Give refresh a second to process
+        sleep 1
+        
+        # Check the command status queue to see if the command is done
+        printOutput "3" "Getting command status queue"
+        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+        while [[ -n "${commandStatus}" ]]; do
+            printOutput "2" "Command status ${debug}: ${commandStatus,,}"
+            if [[ "${commandStatus,,}" == "completed" ]]; then
+                break
+            fi
+            sleep 1
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+        done
+        if [[ -z "${commandStatus}" ]]; then
+            printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+            printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+            sleep 15
+        fi
+
+        # Rename the series
+        printOutput "2" "Issuing rename command for: ${seriesTitle}"
+        commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId}]}" -H "Content-Type: application/json" -X POST 2>&1)"
+        commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+        printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+        printOutput "3" "Command ID: ${commandId}"
+
+        # Give rename a second to process
+        sleep 1
+        
+        # Check the command status queue to see if the command is done
+        printOutput "3" "Getting command status queue"
+        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+        while [[ -n "${commandStatus}" ]]; do
+            printOutput "2" "Command status: ${commandStatus,,}"
+            if [[ "${commandStatus,,}" == "completed" ]]; then
+                break
+            fi
+            sleep 1
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+        done
+        if [[ -z "${commandStatus}" ]]; then
+            printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+            printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+            sleep 15
+        fi
+        
+    fi
+    # Check to see if rename happenedreadarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}")
+    printOutput "3" "Verifying file rename status"
+    readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
+    fileExists="0"
+    for i in "${dirContents[@]}"; do
+        i="${i#\'}"
+        i="${i%\'}"
+        if [[ "${i}" == "${file##*/}" ]]; then
+            printOutput "3" "Matched '${i}' to '${file##*/}'"
+            fileExists="1"
+        fi
+    done
+    epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
+    epCode="${epCode// - /}"
+    if [[ "${fileExists}" -eq "0" ]]; then
+        newEpName="$(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r' | grep -F "${epCode}")"
+        newEpName="${newEpName##${seriesPath} - ${epCode} - }"
+        newEpName="${newEpName%%[*}"
+        newEpName="${newEpName%% }"
+        # In case the episode name is an illegal file name, such as The Changeling S01E03.
+        if [[ -z "${newEpName}" ]]; then
+            newEpName="[null]"
+        fi
+        msgArr+=("Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
+        printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
+    else
+        printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
     fi
 done
 
@@ -496,3 +520,5 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne 
     printOutput "2" "Telegram messaging enabled -- Checking credentials"
     sendTelegramMessage
 fi
+
+cleanExit
