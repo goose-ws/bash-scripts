@@ -38,10 +38,9 @@
 # 3. Edit the .env file to your liking
 # 4. Set the script to run on an hourly cron job, or whatever your preference is
 
-###################################################
-### Begin source, please don't edit below here. ###
-###################################################
-
+#############################
+##      Sanity checks      ##
+#############################
 if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
@@ -69,18 +68,9 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-## Used internally for debugging
-# debugDir="${realPath%/*}/.${scriptName}.debug"
-# mkdir -p "${debugDir}"
-# exec 2> "${debugDir}/$(date).debug"
-# printenv
-# PS4='Line ${LINENO}: '
-# set -x
-# if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
-    # source "${2}"
-    # # Can pass test data with the -s flag (-s /path/to/file)
-# fi
-
+#############################
+##  Positional parameters  ##
+#############################
 # We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
     "-h"|"--help")
@@ -96,6 +86,9 @@ case "${1,,}" in
     ;;
 esac
 
+#############################
+##         Lockfile        ##
+#############################
 if [[ -e "${lockFile}" ]]; then
 exit 0
 else
@@ -107,7 +100,9 @@ RealPath: ${realPath}
 \${#@}: ${#@}" > "${lockFile}"
 fi
 
-# Define some functions
+#############################
+##    Standard Functions   ##
+#############################
 function printOutput {
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
@@ -163,7 +158,6 @@ else
         printOutput "2" "Telegram channel authenticated"
     fi
 fi
-eventText="$(printf "<b>Plex Update for ${dockerHost%%.*}</b>\r\n\r\nPlex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>")"
 for chanId in "${telegramChannelId[@]}"; do
     telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
     curlExitCode="${?}"
@@ -184,6 +178,9 @@ for chanId in "${telegramChannelId[@]}"; do
 done
 }
 
+#############################
+##     Unique Functions    ##
+#############################
 function getNowPlaying {
 nowPlaying="$(curl -skL -m 15 "${plexAdd}/status/sessions?X-Plex-Token=${plexAccessToken}" | grep -Eo "size=\"[[:digit:]]+\"")"
 nowPlaying="${nowPlaying#*size=\"}"
@@ -191,7 +188,9 @@ nowPlaying="${nowPlaying%%\"*}"
 printOutput "3" "Now playing count: ${nowPlaying}"
 }
 
-# Get config options
+#############################
+##   Initiate .env file    ##
+#############################
 source "${realPath%/*}/${scriptName%.bash}.env"
 if [[ -z "${plexAccessToken}" ]]; then
     echo "Please specify a 'plexAccessToken=\"\"'"
@@ -265,8 +264,9 @@ if [[ "${varFail}" -eq "1" ]]; then
     badExit "8" "Please fix above errors"
 fi
 
-### Source
-# Can we check for updates?
+#############################
+##       Update check      ##
+#############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     newest="$(curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/update-plex-in-docker.bash" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
@@ -278,8 +278,14 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     fi
 fi
 
-### Build variable ${plexServerAddress} here
+#############################
+##         Payload         ##
+#############################
 # Get the IP address of the Plex container
+if ! docker version > /dev/null 2>&1; then
+    badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
+fi
+
 if [[ -z "${containerIp}" ]]; then
     printOutput "2" "Attempting to automatically determine container IP address"
     # Find the type of networking the container is using
@@ -412,11 +418,22 @@ if docker start "${containerName}"; then
 else
     badExit "16" "Unable to start container"
 fi
-dockerHost="$(</etc/hostname)"
-printOutput "3" "Got hostname: ${dockerHost}"
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
+
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne "0" ]]; then
+    dockerHost="$(</etc/hostname)"
+    if [[ "${outputVerbosity}" -ge "3" ]]; then
+    printOutput "3" "Counted ${#msgArr[@]} messages to send:"
+        for i in "${msgArr[@]}"; do
+            printOutput "3" "- ${i}"
+        done
+    fi
+    eventText="$(printf "<b>Plex Update for ${dockerHost%%.*}</b>\r\n\r\nPlex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>")"
+    printOutput "3" "Got hostname: ${dockerHost}"
     printOutput "2" "Telegram messaging enabled -- Checking credentials"
     sendTelegramMessage
 fi
 
+#############################
+##       End of file       ##
+#############################
 cleanExit

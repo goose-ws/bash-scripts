@@ -65,10 +65,9 @@
 # 3. Edit the .env file to your liking
 # 4. Set the script to run on an hourly cron job, or whatever your preference is
 
-###################################################
-### Begin source, please don't edit below here. ###
-###################################################
-
+#############################
+##      Sanity checks      ##
+#############################
 if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
@@ -96,18 +95,9 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 
-## Used internally for debugging
-# debugDir="${realPath%/*}/.${scriptName}.debug"
-# mkdir -p "${debugDir}"
-# exec 2> "${debugDir}/$(date).debug"
-# printenv
-# PS4='Line ${LINENO}: '
-# set -x
-# if [[ "${1}" == "-s" ]] && [[ -e "${2}" ]]; then
-    # source "${2}"
-    # # Can pass test data with the -s flag (-s /path/to/file)
-# fi
-
+#############################
+##  Positional parameters  ##
+#############################
 # We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
     "-h"|"--help")
@@ -123,6 +113,9 @@ case "${1,,}" in
     ;;
 esac
 
+#############################
+##         Lockfile        ##
+#############################
 if [[ -e "${lockFile}" ]]; then
 exit 0
 else
@@ -134,7 +127,9 @@ RealPath: ${realPath}
 \${#@}: ${#@}" > "${lockFile}"
 fi
 
-# Define some functions
+#############################
+##    Standard Functions   ##
+#############################
 function printOutput {
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
@@ -190,7 +185,6 @@ else
         printOutput "2" "Telegram channel authenticated"
     fi
 fi
-eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>$(printf "\r\n\r\n")$(printf '%s\n' "${msgArr[@]}")"
 for chanId in "${telegramChannelId[@]}"; do
     telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
     curlExitCode="${?}"
@@ -211,7 +205,14 @@ for chanId in "${telegramChannelId[@]}"; do
 done
 }
 
-# Get config options
+#############################
+##     Unique Functions    ##
+#############################
+
+
+#############################
+##   Initiate .env file    ##
+#############################
 source "${realPath%/*}/${scriptName%.bash}.env"
 varFail="0"
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
@@ -234,7 +235,9 @@ if [[ "${varFail}" -eq "1" ]]; then
     badExit "8" "Please fix above errors"
 fi
 
-# Can we check for updates?
+#############################
+##       Update check      ##
+#############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     newest="$(curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/sonarr-update-tba.bash" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
@@ -246,6 +249,9 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     fi
 fi
 
+#############################
+##         Payload         ##
+#############################
 # Do we have permission to run on the docker socket?
 if ! docker version > /dev/null 2>&1; then
     badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
@@ -538,9 +544,13 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne 
             printOutput "3" "- ${i}"
         done
     fi
+    eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>$(printf "\r\n\r\n")$(printf '%s\n' "${msgArr[@]}")"
     printOutput "3" "Got hostname: ${dockerHost}"
     printOutput "2" "Telegram messaging enabled -- Checking credentials"
     sendTelegramMessage
 fi
 
+#############################
+##       End of file       ##
+#############################
 cleanExit
