@@ -18,6 +18,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-10-15
+# Fixed the lockfile logic
 # 2023-10-13
 # Updated some spacing, and modified telegram send message command to allow for multiple channels
 # Added a disclaimer for where to file issues above the "About" section
