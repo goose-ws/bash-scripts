@@ -217,6 +217,14 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
     echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
+if [[ "${#containers[@]}" -eq "0" ]]; then
+    echo "No container names defined"
+    echo "###"
+    echo "If using an older version of this script, the .env file has been updated"
+    echo "to support multiple instances of Sonarr -- Please update your .env file:"
+    echo "https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.env.example"
+    varFail="1"
+fi
 if [[ "${varFail}" -eq "1" ]]; then
     badExit "8" "Please fix above errors"
 fi
@@ -233,279 +241,290 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     fi
 fi
 
-# Get Sonarr IP address
-if [[ -z "${containerIp}" ]]; then
-    printOutput "2" "Attempting to automatically determine container IP address"
-    # Find the type of networking the container is using
-    containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${containerName}")"
-    printOutput "3" "Networking type: ${containerNetworking}"
-    if [[ -z "${containerNetworking}" ]]; then
-        printOutput "2" "No network type defined. Checking to see if networking is through another container."
-        # IP address returned blank. Is it being networked through another container?
-        containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
-        containerIp="${containerIp#\"}"
-        containerIp="${containerIp%\"}"
-        printOutput "3" "Network mode: ${containerIp%%:*}"
-        if [[ "${containerIp%%:*}" == "container" ]]; then
-            # Networking is being run through another container. So we need that container's IP address.
-            printOutput "2" "Networking routed through another container. Retrieving IP address."
-            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+# Do we have permission to run on the docker socket?
+if ! docker version > /dev/null 2>&1; then
+    badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
+fi
+
+for containerName in "${containers[@]}"; do
+    printOutput "2" "Processing container: ${containerName}"
+    # Get Sonarr IP address
+    if [[ -z "${containerIp}" ]]; then
+        printOutput "2" "Attempting to automatically determine container IP address"
+        # Find the type of networking the container is using
+        containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${containerName}")"
+        if [[ -z "${containerNetworking}" ]]; then
+            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            # IP address returned blank. Is it being networked through another container?
+            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
+            containerIp="${containerIp#\"}"
+            containerIp="${containerIp%\"}"
+            printOutput "3" "Network mode: ${containerIp%%:*}"
+            if [[ "${containerIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+            else
+                printOutput "1" "Unable to determine networking type"
+                unset containerIp
+            fi
+        elif [[ "${containerNetworking}" == "host" ]]; then
+            # Host networking, so we can probably use localhost
+            printOutput "3" "Networking type: ${containerNetworking}"
+            containerIp="127.0.0.1"
         else
-            printOutput "1" "Unable to determine networking type"
-            unset containerIp
+            # Something else. Let's see if we can get it via inspect.
+            printOutput "3" "Networking type: ${containerNetworking}"
+            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerName}")"
         fi
-    elif [[ "${containerNetworking}" == "host" ]]; then
-        # Host networking, so we can probably use localhost
-        containerIp="127.0.0.1"
-    else
-        # Something else. Let's see if we can get it via inspect.
-        containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerName}")"
+        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+            badExit "10" "Unable to determine IP address"
+        else
+            printOutput "2" "Container IP address: ${containerIp}"
+        fi
     fi
-    if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        badExit "9" "Unable to determine IP address"
+
+    # Read Sonarr config file
+    sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
+    if [[ -z "${sonarrConfig}" ]]; then
+        badExit "11" "Failed to read Sonarr config file"
     else
-        printOutput "2" "Container IP address: ${containerIp}"
+        printOutput "2" "Configuration file retrieved"
+        #printOutput "3" "File contents:$(printf "\r\n\r\n")${sonarrConfig}"
     fi
-fi
 
-# Read Sonarr config file
-sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
-if [[ -z "${sonarrConfig}" ]]; then
-    badExit "10" "Failed to read Sonarr config file"
-else
-    printOutput "2" "Configuration file retrieved"
-    #printOutput "3" "File contents:$(printf "\r\n\r\n")${sonarrConfig}"
-fi
+    # Get Sonarr port from config file
+    sonarrPort="$(grep -Eo "<Port>.*</Port>" <<<"${sonarrConfig}")"
+    sonarrPort="${sonarrPort#<Port>}"
+    sonarrPort="${sonarrPort%</Port>}"
+    if ! [[ "${sonarrPort}" =~ ^[0-9]+$ ]]; then
+        badExit "12" "Failed to obtain port"
+    else
+        printOutput "2" "Port retrieved from config file"
+        printOutput "3" "Port: ${sonarrPort}"
+    fi
 
-# Get Sonarr port from config file
-sonarrPort="$(grep -Eo "<Port>.*</Port>" <<<"${sonarrConfig}")"
-sonarrPort="${sonarrPort#<Port>}"
-sonarrPort="${sonarrPort%</Port>}"
-if ! [[ "${sonarrPort}" =~ ^[0-9]+$ ]]; then
-    badExit "11" "Failed to obtain port"
-else
-    printOutput "2" "Port retrieved from config file"
-    printOutput "3" "Port: ${sonarrPort}"
-fi
+    # Get Sonarr API key from config file
+    sonarrApiKey="$(grep -Eo "<ApiKey>.*</ApiKey>" <<<"${sonarrConfig}")"
+    sonarrApiKey="${sonarrApiKey#<ApiKey>}"
+    sonarrApiKey="${sonarrApiKey%</ApiKey>}"
+    if [[ -z "${sonarrApiKey}" ]]; then
+        badExit "13" "Failed to obtain API key"
+    else
+        printOutput "2" "API key retrieved from config file"
+        printOutput "3" "API key: ${sonarrPort}"
+    fi
 
-# Get Sonarr API key from config file
-sonarrApiKey="$(grep -Eo "<ApiKey>.*</ApiKey>" <<<"${sonarrConfig}")"
-sonarrApiKey="${sonarrApiKey#<ApiKey>}"
-sonarrApiKey="${sonarrApiKey%</ApiKey>}"
-if [[ -z "${sonarrApiKey}" ]]; then
-    badExit "12" "Failed to obtain API key"
-else
-    printOutput "2" "API key retrieved from config file"
-    printOutput "3" "API key: ${sonarrPort}"
-fi
+    # Get Sonarr URL base from config file
+    sonarrUrlBase="$(grep -Eo "<UrlBase>.*</UrlBase>" <<<"${sonarrConfig}")"
+    sonarrUrlBase="${sonarrUrlBase#<UrlBase>}"
+    sonarrUrlBase="${sonarrUrlBase%</UrlBase>}"
+    if [[ -z "${sonarrApiKey}" ]]; then
+        printOutput "2" "No URL base detected"
+    else
+        printOutput "2" "URL base detected"
+        printOutput "3" "URL base: ${sonarrUrlBase}"
+    fi
 
-# Get Sonarr URL base from config file
-sonarrUrlBase="$(grep -Eo "<UrlBase>.*</UrlBase>" <<<"${sonarrConfig}")"
-sonarrUrlBase="${sonarrUrlBase#<UrlBase>}"
-sonarrUrlBase="${sonarrUrlBase%</UrlBase>}"
-if [[ -z "${sonarrApiKey}" ]]; then
-    printOutput "2" "No URL base detected"
-else
-    printOutput "2" "URL base detected"
-    printOutput "3" "URL base: ${sonarrUrlBase}"
-fi
+    # Test Sonarr API
+    printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status?apikey=${sonarrApiKey}"
+    printOutput "2" "Checking API functionality"
+    apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status?apikey=${sonarrApiKey}")"
+    if [[ "${?}" -ne "0" ]]; then
+        badExit "14" "Curl failed"
+    elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
+        badExit "15" "Authorization failure: ${apiCheck}"
+    else
+        printOutput "2" "API authorization succeded"
+    fi
 
-# Test Sonarr API
-printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status?apikey=${sonarrApiKey}"
-printOutput "2" "Checking API functionality"
-apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status?apikey=${sonarrApiKey}")"
-if [[ "${?}" -ne "0" ]]; then
-    badExit "13" "Curl failed"
-elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
-    badExit "14" "Authorization failure: ${apiCheck}"
-else
-    printOutput "2" "API authorization succeded"
-fi
+    # Determine which version of the API we need to use
+    apiVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
+    if [[ "${apiVersion:0:1}" -eq "3" ]]; then
+        printOutput "3" "Detected API version 3"
+        apiRootFolder="/api/v3/rootfolder"
+        apiSeries="/api/v3/series"
+        apiCommand="/api/v3/command"
+    else
+        printOutput "1" "Detected API version ${apiVersion:0:1}"
+        printOutput "1" "Currently only API version 3 is supported"
+        badExit "16" "Please create an issue for support with over API versions"
+    fi
 
-# Determine which version of the API we need to use
-apiVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
-if [[ "${apiVersion:0:1}" -eq "3" ]]; then
-    printOutput "3" "Detected API version 3"
-    apiRootFolder="/api/v3/rootfolder"
-    apiSeries="/api/v3/series"
-    apiCommand="/api/v3/command"
-else
-    printOutput "1" "Detected API version ${apiVersion:0:1}"
-    printOutput "1" "Currently only API version 3 is supported"
-    badExit "15" "Please create an issue for support with over API versions"
-fi
+    # Retrieve Sonarr libraries via API
+    libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}?apikey=${sonarrApiKey}")"
+    numLibraries="$(jq -M length <<<"${libraries}")"
+    unset libraryArr
+    for i in $(seq 0 $(( numLibraries - 1 ))); do
+        item="$(jq -M -r ".[${i}].path" <<<"${libraries}")"
+        item="${item#\"}"
+        item="${item%\"}"
+        libraryArr+=("${item}")
+    done
+    printOutput "2" "Detected ${#libraryArr[@]} libraries"
+    if [[ "${outputVerbosity}" -ge "3" ]]; then
+        for i in "${libraryArr[@]}"; do
+            printOutput "3" "- ${i}"
+        done
+    fi
 
-# Retrieve Sonarr libraries via API
-libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}?apikey=${sonarrApiKey}")"
-numLibraries="$(jq -M length <<<"${libraries}")"
-for i in $(seq 0 $(( numLibraries - 1 ))); do
-    item="$(jq -M -r ".[${i}].path" <<<"${libraries}")"
-    item="${item#\"}"
-    item="${item%\"}"
-    libraryArr+=("${item}")
-done
-printOutput "2" "Detected ${#libraryArr[@]} libraries"
-if [[ "${outputVerbosity}" -ge "3" ]]; then
+    # Search each library for files containing "* TBA *" in the title
+    unset files
     for i in "${libraryArr[@]}"; do
-        printOutput "3" "- ${i}"
+        printOutput "2" "Checking for TBA items in ${i}"
+        matches="0"
+        while read -r ii; do
+            printOutput "3" "Found item: ${ii}"
+            files+=("${i}:${ii}")
+            (( matches++ ))
+        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r')
+        printOutput "2" "Detected ${matches} TBA items"
     done
-fi
 
-# Search each library for files containing "* TBA *" in the title
-for i in "${libraryArr[@]}"; do
-    printOutput "2" "Checking for TBA items in ${i}"
-    matches="0"
-    while read -r ii; do
-        printOutput "3" "Found item: ${ii}"
-        files+=("${i}:${ii}")
-        (( matches++ ))
-    done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r')
-    printOutput "2" "Detected ${matches} TBA items"
-done
-
-# If the array of files matching the search pattern is not empty, iterate through them
-for file in "${files[@]}"; do
-    library="${file%%:*}"
-    file="${file#*:}"
-    printOutput "3" "Library: ${library}"
-    printOutput "3" "File: ${file}"
-    printOutput "2" "Processing ${file##*/}"
-    printOutput "3" "Verifying file has not already been renamed"
-    # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
-    fileExists="0"
-    readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
-    for i in "${dirContents[@]}"; do
-        i="${i#\'}"
-        i="${i%\'}"
-        if [[ "${i}" == "${file##*/}" ]]; then
-            printOutput "3" "Filename unchanged"
-            fileExists="1"
-        fi
-    done
-    if [[ "${fileExists}" -eq "1" ]]; then
-        printOutput "2" "Initiating series rename command"
-        # Find the series ID by searching for a series with the matching path
-        # First we have to extract ${seriesPath} from ${file}
-        # Get the root folder
-        #rootFolder="${file#/}"
-        #rootFolder="${rootFolder%%/*}"
-        rootFolder="${library}"
-        printOutput "3" "Determined root folder: ${rootFolder}"
-        # Next get the series folder
-        seriesFolder="${file#${rootFolder}/}"
-        seriesFolder="${seriesFolder%%/*}"
-        printOutput "3" "Determined series folder: ${seriesFolder}"
-        # Build the series path
-        seriesPath="${rootFolder}/${seriesFolder}"
-        printOutput "3" "Built series path: ${seriesPath}"
-        # Find the series which matches the path
-        series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
-        if [[ -n "${series}" ]]; then
-            printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
-        else
-            badExit "16" "Unable to determine series"
-        fi
-        # Get the title of the series
-        seriesTitle="$(jq -M -r ".title" <<<"${series}")"
-        
-        # Get the series ID for the series
-        readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
-        if [[ -n "${series}" ]]; then
-            printOutput "3" "Determined series ID: ${seriesId}"
-        else
-            badExit "17" "Unable to determine series ID"
-        fi
-
-        # Ensure we only matched one series
-        if [[ "${#seriesId[@]}" -eq "0" ]]; then
-            badExit "18" "Failed to match series ID for file: ${file}"
-        elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-            badExit "19" "More than one matched series ID for file: ${file}"
-        fi
-
-        # Refresh the series
-        printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-        commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
-        commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-        printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-        printOutput "3" "Command ID: ${commandId}"
-
-        # Give refresh a second to process
-        sleep 1
-        
-        # Check the command status queue to see if the command is done
-        printOutput "3" "Getting command status queue"
-        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-        while [[ -n "${commandStatus}" ]]; do
-            printOutput "2" "Command status ${debug}: ${commandStatus,,}"
-            if [[ "${commandStatus,,}" == "completed" ]]; then
-                break
+    # If the array of files matching the search pattern is not empty, iterate through them
+    for file in "${files[@]}"; do
+        library="${file%%:*}"
+        file="${file#*:}"
+        printOutput "3" "Library: ${library}"
+        printOutput "3" "File: ${file}"
+        printOutput "2" "Processing ${file##*/}"
+        printOutput "3" "Verifying file has not already been renamed"
+        # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
+        fileExists="0"
+        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
+        for i in "${dirContents[@]}"; do
+            i="${i#\'}"
+            i="${i%\'}"
+            if [[ "${i}" == "${file##*/}" ]]; then
+                printOutput "3" "Filename unchanged"
+                fileExists="1"
             fi
-            sleep 1
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
         done
-        if [[ -z "${commandStatus}" ]]; then
-            printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-            printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-            sleep 15
-        fi
-
-        # Rename the series
-        printOutput "2" "Issuing rename command for: ${seriesTitle}"
-        commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId}]}" -H "Content-Type: application/json" -X POST 2>&1)"
-        commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-        printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-        printOutput "3" "Command ID: ${commandId}"
-
-        # Give rename a second to process
-        sleep 1
-        
-        # Check the command status queue to see if the command is done
-        printOutput "3" "Getting command status queue"
-        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-        while [[ -n "${commandStatus}" ]]; do
-            printOutput "2" "Command status: ${commandStatus,,}"
-            if [[ "${commandStatus,,}" == "completed" ]]; then
-                break
+        if [[ "${fileExists}" -eq "1" ]]; then
+            printOutput "2" "Initiating series rename command"
+            # Find the series ID by searching for a series with the matching path
+            # First we have to extract ${seriesPath} from ${file}
+            # Get the root folder
+            #rootFolder="${file#/}"
+            #rootFolder="${rootFolder%%/*}"
+            rootFolder="${library}"
+            printOutput "3" "Determined root folder: ${rootFolder}"
+            # Next get the series folder
+            seriesFolder="${file#${rootFolder}/}"
+            seriesFolder="${seriesFolder%%/*}"
+            printOutput "3" "Determined series folder: ${seriesFolder}"
+            # Build the series path
+            seriesPath="${rootFolder}/${seriesFolder}"
+            printOutput "3" "Built series path: ${seriesPath}"
+            # Find the series which matches the path
+            series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
+            if [[ -n "${series}" ]]; then
+                printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
+            else
+                badExit "17" "Unable to determine series"
             fi
+            # Get the title of the series
+            seriesTitle="$(jq -M -r ".title" <<<"${series}")"
+            
+            # Get the series ID for the series
+            readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
+            if [[ -n "${series}" ]]; then
+                printOutput "3" "Determined series ID: ${seriesId}"
+            else
+                badExit "18" "Unable to determine series ID"
+            fi
+
+            # Ensure we only matched one series
+            if [[ "${#seriesId[@]}" -eq "0" ]]; then
+                badExit "19" "Failed to match series ID for file: ${file}"
+            elif [[ "${#seriesId[@]}" -ge "2" ]]; then
+                badExit "20" "More than one matched series ID for file: ${file}"
+            fi
+
+            # Refresh the series
+            printOutput "2" "Issuing refresh command for: ${seriesTitle}"
+            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+            printOutput "3" "Command ID: ${commandId}"
+
+            # Give refresh a second to process
             sleep 1
+            
+            # Check the command status queue to see if the command is done
+            printOutput "3" "Getting command status queue"
             commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-        done
-        if [[ -z "${commandStatus}" ]]; then
-            printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-            printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-            sleep 15
+            while [[ -n "${commandStatus}" ]]; do
+                printOutput "2" "Command status ${debug}: ${commandStatus,,}"
+                if [[ "${commandStatus,,}" == "completed" ]]; then
+                    break
+                fi
+                sleep 1
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            done
+            if [[ -z "${commandStatus}" ]]; then
+                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+                sleep 15
+            fi
+
+            # Rename the series
+            printOutput "2" "Issuing rename command for: ${seriesTitle}"
+            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId}]}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+            printOutput "3" "Command ID: ${commandId}"
+
+            # Give rename a second to process
+            sleep 1
+            
+            # Check the command status queue to see if the command is done
+            printOutput "3" "Getting command status queue"
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            while [[ -n "${commandStatus}" ]]; do
+                printOutput "2" "Command status: ${commandStatus,,}"
+                if [[ "${commandStatus,,}" == "completed" ]]; then
+                    break
+                fi
+                sleep 1
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            done
+            if [[ -z "${commandStatus}" ]]; then
+                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+                sleep 15
+            fi
+            
         fi
-        
-    fi
-    # Check to see if rename happenedreadarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}")
-    printOutput "3" "Verifying file rename status"
-    readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
-    fileExists="0"
-    for i in "${dirContents[@]}"; do
-        i="${i#\'}"
-        i="${i%\'}"
-        if [[ "${i}" == "${file##*/}" ]]; then
-            printOutput "3" "Matched '${i}' to '${file##*/}'"
-            fileExists="1"
+        # Check to see if rename happenedreadarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}")
+        printOutput "3" "Verifying file rename status"
+        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
+        fileExists="0"
+        for i in "${dirContents[@]}"; do
+            i="${i#\'}"
+            i="${i%\'}"
+            if [[ "${i}" == "${file##*/}" ]]; then
+                printOutput "3" "Matched '${i}' to '${file##*/}'"
+                fileExists="1"
+            fi
+        done
+        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
+        epCode="${epCode// - /}"
+        if [[ "${fileExists}" -eq "0" ]]; then
+            newEpName="$(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r' | grep -F "${epCode}")"
+            newEpName="${newEpName##${seriesPath} - ${epCode} - }"
+            newEpName="${newEpName%%[*}"
+            newEpName="${newEpName%% }"
+            # In case the episode name is an illegal file name, such as The Changeling S01E03.
+            if [[ -z "${newEpName}" ]]; then
+                newEpName="[null]"
+            fi
+            msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
+            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
+        else
+            printOutput "2" "[${containerName}] File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
     done
-    epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-    epCode="${epCode// - /}"
-    if [[ "${fileExists}" -eq "0" ]]; then
-        newEpName="$(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r' | grep -F "${epCode}")"
-        newEpName="${newEpName##${seriesPath} - ${epCode} - }"
-        newEpName="${newEpName%%[*}"
-        newEpName="${newEpName%% }"
-        # In case the episode name is an illegal file name, such as The Changeling S01E03.
-        if [[ -z "${newEpName}" ]]; then
-            newEpName="[null]"
-        fi
-        msgArr+=("Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
-        printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
-    else
-        printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
-    fi
 done
 
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne "0" ]]; then
