@@ -403,7 +403,7 @@ for file in "${files[@]}"; do
         if [[ -n "${series}" ]]; then
             printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
         else
-            badExit "99" "Unable to determine series"
+            badExit "16" "Unable to determine series"
         fi
         # Get the title of the series
         seriesTitle="$(jq -M -r ".title" <<<"${series}")"
@@ -413,14 +413,14 @@ for file in "${files[@]}"; do
         if [[ -n "${series}" ]]; then
             printOutput "3" "Determined series ID: ${seriesId}"
         else
-            badExit "99" "Unable to determine series ID"
+            badExit "17" "Unable to determine series ID"
         fi
 
         # Ensure we only matched one series
         if [[ "${#seriesId[@]}" -eq "0" ]]; then
-            badExit "16" "Failed to match series ID for file: ${file}"
+            badExit "18" "Failed to match series ID for file: ${file}"
         elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-            badExit "17" "More than one matched series ID for file: ${file}"
+            badExit "19" "More than one matched series ID for file: ${file}"
         fi
 
         # Refresh the series
