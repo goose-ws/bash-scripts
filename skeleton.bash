@@ -132,27 +132,27 @@ function sendTelegramMessage {
 telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    badExit "0" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
 elif [[ -z "${telegramOutput}" ]]; then
-    badExit "2" "Curl to Telegram to check Bot ID returned an empty string"
+    badExit "0" "Curl to Telegram to check Bot ID returned an empty string"
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
 if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-    badExit "3" "Telegram bot API check failed"
+    badExit "0" "Telegram bot API check failed"
 else
     printOutput "2" "Telegram bot API key authenticated"
     telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+        badExit "0" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
     elif [[ -z "${telegramOutput}" ]]; then
-        badExit "5" "Curl to Telegram to check channel returned an empty string"
+        badExit "0" "Curl to Telegram to check channel returned an empty string"
     else
         printOutput "3" "Curl exit code and null output checks passed"
     fi
     if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        badExit "6" "Telegram channel check failed"
+        badExit "0" "Telegram channel check failed"
     else
         printOutput "2" "Telegram channel authenticated"
     fi
@@ -161,7 +161,7 @@ for chanId in "${telegramChannelId[@]}"; do
     telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+        badExit "0" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
     else
         printOutput "3" "Curl returned zero exit code"
         # Check to make sure Telegram returned a true value for ok
@@ -201,7 +201,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "8" "Please fix above errors"
+    badExit "0" "Please fix above errors"
 fi
 
 #############################
@@ -223,7 +223,7 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
+    badExit "0" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
 fi
 
 
