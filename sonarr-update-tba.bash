@@ -45,7 +45,7 @@
 #############################
 ##        Changelog        ##
 #############################
-# 2023-10-16
+# 2023-10-15
 # Added support for multiple Sonarr instances
 #   If using an older version of the .env file with the newer version of the script, it will Failed
 #   with an error that the .env file needs to be updated. Take a look at the new one, but essentially,
@@ -94,6 +94,8 @@ fi
 realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
+# URL of where the most updated version of the script is
+updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/sonarr-update-tba.bash"
 
 #############################
 ##  Positional parameters  ##
@@ -107,9 +109,18 @@ case "${1,,}" in
         exit 0
     ;;
     "-u"|"--update")
-        curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/sonarr-update-tba.bash" -o "${0}"
-        chmod +x "${0}"
-        exit 0
+        if curl -skL "${updateURL}" -o "${0}"; then
+            if chmod +x "${0}"; then
+                echo "Update complete"
+                exit 0
+            else
+                echo "Update downloaded, but unable to `chmod +x`"
+                exit 255
+            fi
+        else
+            echo "Unable to download update"
+            exit 255
+        fi
     ;;
 esac
 
@@ -215,6 +226,7 @@ done
 #############################
 source "${realPath%/*}/${scriptName%.bash}.env"
 varFail="0"
+# Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     echo "Option to check for updates not valid. Assuming no."
     updateCheck="No"
@@ -223,6 +235,8 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
     echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
+
+# Config specific checks
 if [[ "${#containers[@]}" -eq "0" ]]; then
     echo "No container names defined"
     echo "###"
@@ -231,6 +245,8 @@ if [[ "${#containers[@]}" -eq "0" ]]; then
     echo "https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.env.example"
     varFail="1"
 fi
+
+# Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
     badExit "8" "Please fix above errors"
 fi
@@ -239,7 +255,7 @@ fi
 ##       Update check      ##
 #############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
-    newest="$(curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/sonarr-update-tba.bash" | md5sum | awk '{print $1}')"
+    newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
         # Although it's not an error, we should always be allowed to print this message if update checks are allowed, so giving it priority 1
@@ -252,7 +268,7 @@ fi
 #############################
 ##         Payload         ##
 #############################
-# Do we have permission to run on the docker socket?
+# If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
     badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
 fi
