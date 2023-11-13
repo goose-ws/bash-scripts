@@ -45,6 +45,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-11-13
+# Added support for updating metadata for TBA items in Plex
+#   If using an older version of the .env file with the newer version of the script, you may want to
+#   look at the updated .env.example file for the added config items required to enable this function.
 # 2023-10-15
 # Added support for multiple Sonarr instances
 #   If using an older version of the .env file with the newer version of the script, it will Failed
