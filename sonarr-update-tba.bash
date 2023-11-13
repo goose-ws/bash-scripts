@@ -114,7 +114,7 @@ case "${1,,}" in
                 echo "Update complete"
                 exit 0
             else
-                echo "Update downloaded, but unable to `chmod +x`"
+                echo "Update downloaded, but unable to 'chmod +x'"
                 exit 255
             fi
         else
@@ -270,7 +270,7 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
+    badExit "9" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
 for containerName in "${containers[@]}"; do
@@ -355,8 +355,9 @@ for containerName in "${containers[@]}"; do
     printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status?apikey=${sonarrApiKey}"
     printOutput "2" "Checking API functionality"
     apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status?apikey=${sonarrApiKey}")"
-    if [[ "${?}" -ne "0" ]]; then
-        badExit "14" "Curl failed"
+    curlExitCode="${?}"
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+        badExit "14" "Curl returned non-zero exit code: ${curlExitCode}"
     elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
         badExit "15" "Authorization failure: ${apiCheck}"
     else
@@ -454,7 +455,7 @@ for containerName in "${containers[@]}"; do
             # Get the series ID for the series
             readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
             if [[ -n "${series}" ]]; then
-                printOutput "3" "Determined series ID: ${seriesId}"
+                printOutput "3" "Determined series ID: ${seriesId[0]}"
             else
                 badExit "18" "Unable to determine series ID"
             fi
@@ -468,7 +469,7 @@ for containerName in "${containers[@]}"; do
 
             # Refresh the series
             printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId[0]}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
             printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
             printOutput "3" "Command ID: ${commandId}"
@@ -495,7 +496,7 @@ for containerName in "${containers[@]}"; do
 
             # Rename the series
             printOutput "2" "Issuing rename command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId}]}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId[0]}]}" -H "Content-Type: application/json" -X POST 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
             printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
             printOutput "3" "Command ID: ${commandId}"
@@ -551,6 +552,87 @@ for containerName in "${containers[@]}"; do
         fi
     done
 done
+
+# Check Plex for TBA items, and update their metadata too
+if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${plexPort}" ]]; then
+    plexSkip="0"
+    printOutput "2" "Plex token detected, attempting to check for TBA items in Plex"
+    if ! command -v "xq" > /dev/null 2>&1; then
+        printOutput "1" "The 'xq' program is required for Plex TBA functionality"
+    else
+        printOutput "2" "Attempting to automatically determine container IP address"
+        # Find the type of networking the container is using
+        containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${plexContainer}")"
+        printOutput "3" "Networking type: ${containerNetworking}"
+        if [[ -z "${containerNetworking}" ]]; then
+            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            # IP address returned blank. Is it being networked through another container?
+            containerIp="$(docker inspect "${plexContainer}" | jq ".[].HostConfig.NetworkMode")"
+            containerIp="${containerIp#\"}"
+            containerIp="${containerIp%\"}"
+            printOutput "3" "Network mode: ${containerIp%%:*}"
+            if [[ "${containerIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+            else
+                printOutput "1" "Unable to determine networking type"
+                unset containerIp
+            fi
+        elif [[ "${containerNetworking}" == "host" ]]; then
+            # Host networking, so we can probably use localhost
+            containerIp="127.0.0.1"
+        else
+            # Something else. Let's see if we can get it via inspect.
+            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${plexContainer}")"
+        fi
+        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+            printOutput "1" "Unable to determine plex container IP address"
+            plexSkip="1"
+        else
+            printOutput "2" "Container IP address: ${containerIp}"
+        fi
+        # This serves as a sanity check for our Access Token
+        # Build our address
+        plexAdd="${plexScheme}://${containerIp}:${plexPort}"
+        printOutput "3" "Plex address: ${plexAdd} [Token: ${plexToken}]"
+
+        # Make sure PMS is reachable, and we can check our version
+        myVer="$(curl -skL -m 15 "${plexAdd}/servers?X-Plex-Token=${plexToken}")"
+        curlExitCode="${?}"
+        if [[ "${curlExitCode}" -ne "0" ]]; then
+            printOutput "1" "Unable to check local version, curl returned non-zero exit code: ${curlExitCode}"
+            plexSkip="1"
+        fi
+        myVer="$(grep -Ev "^<\?xml" <<<"${myVer}" | grep -Eo "version=\"([[:alnum:]]|\.|-)+\"")"
+        myVer="${myVer#*version=\"}"
+        myVer="${myVer%%\"*}"
+        if [[ "${myVer}" == "null" ]] || [[ -z "${myVer}" ]]; then
+            printOutput "1" "Unable to parse local version"
+            plexSkip="1"
+        else
+            printOutput "2" "Plex authentication verified"
+            printOutput "3" "Detected local version: ${myVer}"
+        fi
+        
+        # Get a list of TBA items
+        if [[ "${plexSkip}" -eq "0" ]]; then
+            read -r -a plexArr < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] | select(.\"@title\" == \"TBA\").\"@key\" else select(.\"@title\" == \"TBA\").\"@key\" end")
+            if [[ "${#plexArr[@]}" -ge "1" ]]; then
+                printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA\" title"
+                for key in "${!plexArr[@]}"; do
+                    plexFile="$(curl -skL "${plexAdd}${plexArr[${key}]}?X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video.Media.Part.\"@file\"")"
+                    printOutput "2" "Issuing refresh call to Plex for: ${plexFile}"
+                    curl -skL "${plexAdd}${plexArr[${key}]}/refresh?X-Plex-Token=${plexToken}" -X PUT
+                    curlExitCode="${?}"
+                    if [[ "${curlExitCode}" -ne "0" ]]; then
+                        printOutput "1" "Bad output - curl returned non-zero exit code: ${curlExitCode}"
+                    fi
+                done
+            fi
+        fi
+    fi
+fi
 
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne "0" ]]; then
     dockerHost="$(</etc/hostname)"
