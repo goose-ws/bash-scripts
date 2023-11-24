@@ -369,14 +369,15 @@ for containerName in "${containers[@]}"; do
     fi
 
     # Determine which version of the API we need to use
-    apiVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
-    if [[ "${apiVersion:0:1}" -eq "3" ]]; then
+    # Sonarr v3 and v4 use API v3
+    sonarrVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
+    if [[ "${sonarrVersion:0:1}" -eq "3" || "${sonarrVersion:0:1}" -eq "4" ]]; then
         printOutput "3" "Detected API version 3"
         apiRootFolder="/api/v3/rootfolder"
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
     else
-        printOutput "1" "Detected API version ${apiVersion:0:1}"
+        printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 is supported"
         badExit "16" "Please create an issue for support with other API versions"
     fi
