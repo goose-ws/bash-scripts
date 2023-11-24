@@ -378,7 +378,7 @@ for containerName in "${containers[@]}"; do
     else
         printOutput "1" "Detected API version ${apiVersion:0:1}"
         printOutput "1" "Currently only API version 3 is supported"
-        badExit "16" "Please create an issue for support with over API versions"
+        badExit "16" "Please create an issue for support with other API versions"
     fi
 
     # Retrieve Sonarr libraries via API
