@@ -45,6 +45,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-11-24
+# Added support for Sonarr v4, which also uses API v3 (Thanks for the issue @schumi4)
 # 2023-11-13
 # Added support for updating metadata for TBA items in Plex
 #   If using an older version of the .env file with the newer version of the script, you may want to
