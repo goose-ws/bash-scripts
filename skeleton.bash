@@ -141,7 +141,7 @@ fi
 if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
     badExit "0" "Telegram bot API check failed"
 else
-    printOutput "2" "Telegram bot API key authenticated"
+    printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
     telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -154,7 +154,7 @@ else
     if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
         badExit "0" "Telegram channel check failed"
     else
-        printOutput "2" "Telegram channel authenticated"
+        printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
     fi
 fi
 for chanId in "${telegramChannelId[@]}"; do
@@ -171,7 +171,7 @@ for chanId in "${telegramChannelId[@]}"; do
             printOutput "1" "$(jq . <<<"${telegramOutput}")"
             printOutput "1" ""
         else
-            printOutput "2" "Telegram message sent to channel ${chanId} successfully"
+            printOutput "2" "Telegram message sent successfully"
         fi
     fi
 done
@@ -181,6 +181,12 @@ done
 ##     Unique Functions    ##
 #############################
 
+#############################
+##       Signal Traps      ##
+#############################
+trap "badExit SIGINT" INT
+trap "badExit SIGQUIT" QUIT
+trap "badExit SIGKILL" KILL
 
 #############################
 ##   Initiate .env file    ##
