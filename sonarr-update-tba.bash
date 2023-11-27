@@ -45,6 +45,15 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-11-27
+# Fleshed out support for Sonarr v4 due to requests being malformed in the POST command API calls (HUGE thanks to @StevieTV helping me with the fix)
+# Narrowed the 'find' command to only find video formats supported by Plex
+# Improved lockfile behavior and added a warning if a lockfile exists
+# Added traps for SIGINT, SIGQUIT, SIGKILL
+# Fixed some typos and improved some verbiage
+# Improved the way new titles for renamed items are obtained
+# Moved the Sonarr API key in 'curl' calls from the URL to a header
+# Removed any sensitive information from the 'verbose' output
 # 2023-11-24
 # Added support for Sonarr v4, which also uses API v3 (Thanks for the issue @schumi4)
 # 2023-11-13
@@ -134,15 +143,14 @@ esac
 ##         Lockfile        ##
 #############################
 if [[ -e "${lockFile}" ]]; then
-exit 0
-else
-echo "PID: ${$}
-PWD: $(/bin/pwd)
-Date: $(/bin/date)
-RealPath: ${realPath}
-\${@}: ${@}
-\${#@}: ${#@}" > "${lockFile}"
+    if kill -s 0 "$(<"${lockfile}")"; then
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
+        exit 0
+    else
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockfile}")"
+    fi
 fi
+echo "${$}" > "${lockFile}"
 
 #############################
 ##    Standard Functions   ##
@@ -162,9 +170,14 @@ fi
 }
 
 function badExit {
-printOutput "1" "${2}"
-removeLock
-exit "${1}"
+    removeLock
+if [[ -z "${2}" ]]; then
+    printOutput "0" "Received signal: ${1}"
+    exit "255"
+else
+    printOutput "1" "${2}"
+    exit "${1}"
+fi
 }
 
 function cleanExit {
@@ -183,10 +196,10 @@ elif [[ -z "${telegramOutput}" ]]; then
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
-if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
     badExit "3" "Telegram bot API check failed"
 else
-    printOutput "2" "Telegram bot API key authenticated"
+    printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
     telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -196,10 +209,10 @@ else
     else
         printOutput "3" "Curl exit code and null output checks passed"
     fi
-    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
         badExit "6" "Telegram channel check failed"
     else
-        printOutput "2" "Telegram channel authenticated"
+        printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
     fi
 fi
 for chanId in "${telegramChannelId[@]}"; do
@@ -210,13 +223,13 @@ for chanId in "${telegramChannelId[@]}"; do
     else
         printOutput "3" "Curl returned zero exit code"
         # Check to make sure Telegram returned a true value for ok
-        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+        if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
             printOutput "1" "Failed to send Telegram message:"
             printOutput "1" ""
             printOutput "1" "$(jq . <<<"${telegramOutput}")"
             printOutput "1" ""
         else
-            printOutput "2" "Telegram message sent to channel ${chanId} successfully"
+            printOutput "2" "Telegram message sent successfully"
         fi
     fi
 done
@@ -226,6 +239,12 @@ done
 ##     Unique Functions    ##
 #############################
 
+#############################
+##       Signal Traps      ##
+#############################
+trap "badExit SIGINT" INT
+trap "badExit SIGQUIT" QUIT
+trap "badExit SIGKILL" KILL
 
 #############################
 ##   Initiate .env file    ##
@@ -358,9 +377,9 @@ for containerName in "${containers[@]}"; do
     fi
 
     # Test Sonarr API
-    printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status?apikey=${sonarrApiKey}"
+    printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status"
     printOutput "2" "Checking API functionality"
-    apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status?apikey=${sonarrApiKey}")"
+    apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
         badExit "14" "Curl returned non-zero exit code: ${curlExitCode}"
@@ -374,18 +393,19 @@ for containerName in "${containers[@]}"; do
     # Sonarr v3 and v4 use API v3
     sonarrVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
     if [[ "${sonarrVersion:0:1}" -eq "3" || "${sonarrVersion:0:1}" -eq "4" ]]; then
-        printOutput "3" "Detected API version 3"
+        printOutput "3" "Detected Sonarr v${sonarrVersion:0:1}, API v3"
         apiRootFolder="/api/v3/rootfolder"
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
+        apiEpisode="/api/v3/episode"
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
-        printOutput "1" "Currently only API version 3 is supported"
+        printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
         badExit "16" "Please create an issue for support with other API versions"
     fi
 
     # Retrieve Sonarr libraries via API
-    libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}?apikey=${sonarrApiKey}")"
+    libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     numLibraries="$(jq -M length <<<"${libraries}")"
     unset libraryArr
     for i in $(seq 0 $(( numLibraries - 1 ))); do
@@ -402,6 +422,10 @@ for containerName in "${containers[@]}"; do
     fi
 
     # Search each library for files containing "* TBA *" in the title
+    # Supported media types per https://www.plexopedia.com/plex-media-server/general/file-formats-supported-plex/#video
+    # ASF, AVI, MOV, MP4, MPEGTS, TS, MKV, wmv
+    # Have to use 'grep' as the busybox version of the Sonarr v4 container does not support '-iregex'
+    # Can add support for others by modifying the 'grep' line below
     unset files
     for i in "${libraryArr[@]}"; do
         printOutput "2" "Checking for TBA items in ${i}"
@@ -410,7 +434,7 @@ for containerName in "${containers[@]}"; do
             printOutput "3" "Found item: ${ii}"
             files+=("${i}:${ii}")
             (( matches++ ))
-        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r')
+        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$")
         printOutput "2" "Detected ${matches} TBA items"
     done
 
@@ -450,7 +474,7 @@ for containerName in "${containers[@]}"; do
             seriesPath="${rootFolder}/${seriesFolder}"
             printOutput "3" "Built series path: ${seriesPath}"
             # Find the series which matches the path
-            series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
+            series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
             else
@@ -473,10 +497,16 @@ for containerName in "${containers[@]}"; do
             elif [[ "${#seriesId[@]}" -ge "2" ]]; then
                 badExit "20" "More than one matched series ID for file: ${file}"
             fi
-
+            
+            # Verify that the episode name is actually TBA
+            epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
+            epCode="${epCode// - /}"
+            fileSeasonNum="${epCode%E*}"
+            fileSeasonNum="${fileSeasonNum#S}"
+            fileEpisodeNum="${epCode#*E}"
             # Refresh the series
             printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RefreshSeries\", seriesId: \"${seriesId[0]}\"}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
             printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
             printOutput "3" "Command ID: ${commandId}"
@@ -486,14 +516,14 @@ for containerName in "${containers[@]}"; do
             
             # Check the command status queue to see if the command is done
             printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
             while [[ -n "${commandStatus}" ]]; do
                 printOutput "2" "Command status ${debug}: ${commandStatus,,}"
                 if [[ "${commandStatus,,}" == "completed" ]]; then
                     break
                 fi
                 sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
             done
             if [[ -z "${commandStatus}" ]]; then
                 printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
@@ -503,7 +533,7 @@ for containerName in "${containers[@]}"; do
 
             # Rename the series
             printOutput "2" "Issuing rename command for: ${seriesTitle}"
-            commandOutput="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" -d "{name: \"RenameSeries\", seriesIds: [${seriesId[0]}]}" -H "Content-Type: application/json" -X POST 2>&1)"
+            commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
             printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
             printOutput "3" "Command ID: ${commandId}"
@@ -513,23 +543,22 @@ for containerName in "${containers[@]}"; do
             
             # Check the command status queue to see if the command is done
             printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
             while [[ -n "${commandStatus}" ]]; do
                 printOutput "2" "Command status: ${commandStatus,,}"
                 if [[ "${commandStatus,,}" == "completed" ]]; then
                     break
                 fi
                 sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}?apikey=${sonarrApiKey}" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
             done
             if [[ -z "${commandStatus}" ]]; then
                 printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
                 printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                 sleep 15
             fi
-            
         fi
-        # Check to see if rename happenedreadarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}")
+        # Check to see if rename happened
         printOutput "3" "Verifying file rename status"
         readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
         fileExists="0"
@@ -541,14 +570,12 @@ for containerName in "${containers[@]}"; do
                 fileExists="1"
             fi
         done
-        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-        epCode="${epCode// - /}"
         if [[ "${fileExists}" -eq "0" ]]; then
-            newEpName="$(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r' | grep -F "${epCode}")"
-            newEpName="${newEpName##${seriesPath} - ${epCode} - }"
-            newEpName="${newEpName%%[*}"
-            newEpName="${newEpName%% }"
+            printOutput "3" "Requesting new file name from Sonarr"
+            newEpName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
+            newEpName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${newEpName}")"
             # In case the episode name is an illegal file name, such as The Changeling S01E03.
+            # Probably no longer necessary since moving to asking Sonarr for the title, instead of the file system
             if [[ -z "${newEpName}" ]]; then
                 newEpName="[null]"
             fi
@@ -602,7 +629,7 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
         # This serves as a sanity check for our Access Token
         # Build our address
         plexAdd="${plexScheme}://${containerIp}:${plexPort}"
-        printOutput "3" "Plex address: ${plexAdd} [Token: ${plexToken}]"
+        printOutput "3" "Plex address: ${plexAdd}"
 
         # Make sure PMS is reachable, and we can check our version
         myVer="$(curl -skL -m 15 "${plexAdd}/servers?X-Plex-Token=${plexToken}")"
@@ -619,11 +646,12 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
             plexSkip="1"
         else
             printOutput "2" "Plex authentication verified"
-            printOutput "3" "Detected local version: ${myVer}"
+            printOutput "3" "Plex version: ${myVer}"
         fi
         
         # Get a list of TBA items
         if [[ "${plexSkip}" -eq "0" ]]; then
+            printOutput "2" "Checking for TBA items in the Plex library"
             read -r -a plexArr < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] | select(.\"@title\" == \"TBA\").\"@key\" else select(.\"@title\" == \"TBA\").\"@key\" end")
             if [[ "${#plexArr[@]}" -ge "1" ]]; then
                 printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA\" title"
@@ -636,6 +664,8 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
                         printOutput "1" "Bad output - curl returned non-zero exit code: ${curlExitCode}"
                     fi
                 done
+            else
+                printOutput "2" "No TBA items detected in the Plex library"
             fi
         fi
     fi
