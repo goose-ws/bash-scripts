@@ -196,7 +196,7 @@ elif [[ -z "${telegramOutput}" ]]; then
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
-if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
     badExit "3" "Telegram bot API check failed"
 else
     printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
@@ -209,7 +209,7 @@ else
     else
         printOutput "3" "Curl exit code and null output checks passed"
     fi
-    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
         badExit "6" "Telegram channel check failed"
     else
         printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
@@ -223,7 +223,7 @@ for chanId in "${telegramChannelId[@]}"; do
     else
         printOutput "3" "Curl returned zero exit code"
         # Check to make sure Telegram returned a true value for ok
-        if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
             printOutput "1" "Failed to send Telegram message:"
             printOutput "1" ""
             printOutput "1" "$(jq . <<<"${telegramOutput}")"
@@ -601,7 +601,7 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
         if [[ -z "${containerNetworking}" ]]; then
             printOutput "2" "No network type defined. Checking to see if networking is through another container."
             # IP address returned blank. Is it being networked through another container?
-            containerIp="$(docker inspect "${plexContainer}" | jq ".[].HostConfig.NetworkMode")"
+            containerIp="$(docker inspect "${plexContainer}" | jq -M -r ".[].HostConfig.NetworkMode")"
             containerIp="${containerIp#\"}"
             containerIp="${containerIp%\"}"
             printOutput "3" "Network mode: ${containerIp%%:*}"
