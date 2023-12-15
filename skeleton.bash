@@ -33,7 +33,7 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("awk" "curl" "docker" "jq" "md5sum" "printf" "rm" "xmllint")
+depArr=("awk" "curl" "md5sum" "printf" "rm")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
@@ -89,15 +89,14 @@ esac
 ##         Lockfile        ##
 #############################
 if [[ -e "${lockFile}" ]]; then
-exit 0
-else
-echo "PID: ${$}
-PWD: $(/bin/pwd)
-Date: $(/bin/date)
-RealPath: ${realPath}
-\${@}: ${@}
-\${#@}: ${#@}" > "${lockFile}"
+    if kill -s 0 "$(<"${lockfile}")"; then
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
+        exit 0
+    else
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockfile}")"
+    fi
 fi
+echo "${$}" > "${lockFile}"
 
 #############################
 ##    Standard Functions   ##
@@ -117,9 +116,14 @@ fi
 }
 
 function badExit {
-printOutput "1" "${2}"
-removeLock
-exit "${1}"
+    removeLock
+if [[ -z "${2}" ]]; then
+    printOutput "0" "Received signal: ${1}"
+    exit "255"
+else
+    printOutput "1" "${2}"
+    exit "${1}"
+fi
 }
 
 function cleanExit {
@@ -132,27 +136,27 @@ function sendTelegramMessage {
 telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "0" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    badExit "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
 elif [[ -z "${telegramOutput}" ]]; then
-    badExit "0" "Curl to Telegram to check Bot ID returned an empty string"
+    badExit "2" "Curl to Telegram to check Bot ID returned an empty string"
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
-if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-    badExit "0" "Telegram bot API check failed"
+if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+    badExit "3" "Telegram bot API check failed"
 else
     printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
     telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "0" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+        badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
     elif [[ -z "${telegramOutput}" ]]; then
-        badExit "0" "Curl to Telegram to check channel returned an empty string"
+        badExit "5" "Curl to Telegram to check channel returned an empty string"
     else
         printOutput "3" "Curl exit code and null output checks passed"
     fi
-    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        badExit "0" "Telegram channel check failed"
+    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+        badExit "6" "Telegram channel check failed"
     else
         printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
     fi
@@ -161,11 +165,11 @@ for chanId in "${telegramChannelId[@]}"; do
     telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "0" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+        badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
     else
         printOutput "3" "Curl returned zero exit code"
         # Check to make sure Telegram returned a true value for ok
-        if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
             printOutput "1" "Failed to send Telegram message:"
             printOutput "1" ""
             printOutput "1" "$(jq . <<<"${telegramOutput}")"
