@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 
 #############################
+##         Issues          ##
+#############################
+# If you experience any issues, please let me know here:
+# https://github.com/goose-ws/bash-scripts
+# These scripts are purely a passion project of convenience for myself, so pull requests welcome :)
+
+#############################
 ##          About          ##
 #############################
 # This script serves to manage captive DNS on a UDM Pro. Captive DNS meaning it will *force*
@@ -14,18 +21,11 @@
 # - 10.10.10.11
 # They are the only two devices in that 10.10.10.0/24 CIDR range (other than the gateway, of course).
 
-# Of note, I tried to build some "debug" functionality into it. If anything fails, it should
-# leave the lock file in place with some debug information, as well as the stderr/stdout.
-# Assuming you follow the installation instructions, you can find these at:
-# - /data/scripts/.captive-dns.sh.lock.${PID}
-# - /data/scripts/.captive-dns.sh.stderr.${PID}
-# - /data/scripts/.captive-dns.sh.stdout.${PID}
-# If you run into any problems with me, create an issue on GitHub, or reach out via IRC in #goose
-# on Libera -- My response time should be less than 24 hours, and I'll help as best I can.
-
 #############################
 ##        Changelog        ##
 #############################
+# 2023-12-15
+# Updated formatting and output to my "new standard"
 # 2023-02-16
 # Updated to work with Unifi 2.4.27, which is now based on Debian
 # Greatly improved and simplified the logic of the script, now that we can use proper bash rather than sh
@@ -43,401 +43,469 @@
 # 3. Copy 'captive-dns.env.example' to 'captive-dns.env' and edit it to your liking
 # 4. Run the command '/data/scripts/captive-dns.bash --install' to install it to cron and on_boot.d
 
-###################################################
-### Begin source, please don't edit below here. ###
-###################################################
-
-# Sanity and dependency check
-if [[ -z "${BASH_VERSINFO}" || -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
-    /bin/echo "This script requires Bash version 4 or greater"
+#############################
+##      Sanity checks      ##
+#############################
+if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
+    echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("/usr/bin/awk" "/bin/cp" "/usr/bin/curl" "/bin/date" "/bin/echo" "/bin/grep" "/usr/bin/host" "/usr/bin/md5sum" "/bin/mv" "/bin/pwd" "/bin/rm" "/usr/sbin/iptables" "/usr/bin/sort")
+depArr=("awk" "cp" "curl" "date" "echo" "grep" "host" "md5sum" "mv" "pwd" "rm" "iptables" "sort")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
         if ! [[ -e "${i}" ]]; then
-            /bin/echo "${i}\\tnot found"
+            echo "${i}\\tnot found"
             depFail="1"
         fi
     else
-        if ! command -v ${i} > /dev/null 2>&1; then
-            /bin/echo "${i}\\tnot found"
+        if ! command -v "${i}" > /dev/null 2>&1; then
+            echo "${i}\\tnot found"
             depFail="1"
         fi
     fi
 done
 if [[ "${depFail}" -eq "1" ]]; then
-    /bin/echo "Dependency check failed"
+    echo "Dependency check failed"
     exit 255
 fi
-
-# Included for debug purposes
-PS4='Line ${LINENO}: '
 realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
-exec 2>"${realPath%/*}/.${scriptName}.stderr"
-set -x
+# URL of where the most updated version of the script is
+updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash"
 
+#############################
+##         Lockfile        ##
+#############################
 if [[ -e "${lockFile}" ]]; then
-    exit 0
-else
-    /bin/echo "PID: ${$}
-PWD: $(/bin/pwd)
-Date: $(/bin/date)
-RealPath: ${realPath}
-\${@}: ${@}
-\${#@}: ${#@}" > "${lockFile}"
+    if kill -s 0 "$(<"${lockfile}")"; then
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
+        exit 0
+    else
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockfile}")"
+    fi
 fi
+echo "${$}" > "${lockFile}"
 
-# Define functions
+#############################
+##    Standard Functions   ##
+#############################
+function printOutput {
+if [[ "${1}" -le "${outputVerbosity}" ]]; then
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
+fi
+}
+
+function removeLock {
+if rm -f "${lockFile}"; then
+    printOutput "3" "Lockfile removed"
+else
+    printOutput "1" "Unable to remove lockfile"
+fi
+}
+
+function badExit {
+    removeLock
+if [[ -z "${2}" ]]; then
+    printOutput "0" "Received signal: ${1}"
+    exit "255"
+else
+    printOutput "1" "${2}"
+    exit "${1}"
+fi
+}
+
+function cleanExit {
+if [[ "${1}" == "silent" ]]; then
+    outputVerbosity="0"
+fi
+removeLock
+exit 0
+}
+
+function sendTelegramMessage {
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
+    # Let's check to make sure our messaging credentials are valid
+    telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
+    curlExitCode="${?}"
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+        badExit "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    elif [[ -z "${telegramOutput}" ]]; then
+        badExit "2" "Curl to Telegram to check Bot ID returned an empty string"
+    else
+        printOutput "3" "Curl exit code and null output checks passed"
+    fi
+    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+        badExit "3" "Telegram bot API check failed"
+    else
+        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+        telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+        curlExitCode="${?}"
+        if [[ "${curlExitCode}" -ne "0" ]]; then
+            badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+        elif [[ -z "${telegramOutput}" ]]; then
+            badExit "5" "Curl to Telegram to check channel returned an empty string"
+        else
+            printOutput "3" "Curl exit code and null output checks passed"
+        fi
+        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+            badExit "6" "Telegram channel check failed"
+        else
+            printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
+        fi
+    fi
+    for chanId in "${telegramChannelId[@]}"; do
+        telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+        curlExitCode="${?}"
+        if [[ "${curlExitCode}" -ne "0" ]]; then
+            badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+        else
+            printOutput "3" "Curl returned zero exit code"
+            # Check to make sure Telegram returned a true value for ok
+            if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+                printOutput "1" "Failed to send Telegram message:"
+                printOutput "1" ""
+                printOutput "1" "$(jq . <<<"${telegramOutput}")"
+                printOutput "1" ""
+            else
+                printOutput "2" "Telegram message sent successfully"
+            fi
+        fi
+    done
+fi
+}
+
+#############################
+##     Unique Functions    ##
+#############################
 removeRules () {
+printOutput "3" "Initiating rule removal"
 while read -r i; do
-    /bin/echo "Removing iptables NAT rule ${i}"
-    /usr/sbin/iptables -t nat -D PREROUTING "${i}"
-done < <(/usr/sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /usr/bin/awk '{print $1}' | /usr/bin/sort -nr)
+    printOutput "2" "Removing iptables NAT rule ${i}"
+    iptables -t nat -D PREROUTING "${i}"
+done < <(iptables -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
+printOutput "3" "Rule removal complete"
 }
 
 addRules () {
+printOutput "3" "Initiating rule adding"
 if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    /bin/echo "${1} is not a valid IP address"
-    /bin/rm -f "${lockFile}"
-    exit 1
+    badExit "8" "${1} is not a valid IP address"
 fi
 if ! [[ "${2}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    /bin/echo "${2} is not a valid IP address or CIDR range"
-    /bin/rm -f "${lockFile}"
-    exit 1
+    badExit "9" "${2} is not a valid IP address or CIDR range"
 fi
 # Should be passed as: addRules "IP address you want redirected to" "IP address or CIDR range allowed"
 for intfc in "${vlanInterfaces[@]}"; do
-    /bin/echo "Forcing interface ${intfc} to ${1}:${dnsPort}"
-    /usr/sbin/iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
+    printOutput "2" "Forcing interface ${intfc} to ${1}:${dnsPort}"
+    iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
 done
+printOutput "3" "Rule adding complete"
 }
 
 testDNS () {
-/bin/echo "Testing DNS via ${1}"
-if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
+printOutput "3" "Initiating DNS test"
+if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
     # Wait 5 seconds and try again, in case of timeout
     sleep 5
-    if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
-        /bin/echo "DNS test via ${1} failed"
+    if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
+        printOutput "1" "DNS test failed: ${1}"
+        printOutput "3" "DNS testing complete"
         return 1
     else
-        /bin/echo "DNS test via ${1} succeded"
+        printOutput "2" "DNS test succeded: ${1}"
+        printOutput "3" "DNS testing complete"
         return 0
     fi
 else
-    /bin/echo "DNS test via ${1} succeded"
+    printOutput "2" "DNS test succeded: ${1}"
+    printOutput "3" "DNS testing complete"
     return 0
 fi
 }
 
-tgMsg () {
-# example:
-# $1 = Primary [${primaryDNS}]
-# $2 = Tertiary/Failover [${tertiaryDNS}]
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
-    eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from ${1} to ${2}"
-    sendMsg="$(/usr/bin/curl -skL --header "Host: api.telegram.org" --data-urlencode "text=${eventText}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${telegramChannelId}&parse_mode=html" 2>&1)"
-    if [[ "${?}" -ne "0" ]]; then
-        /bin/echo "API call to Telegram failed"
-    else
-        # Check to make sure Telegram returned a true value for ok
-        msgStatus="$(/bin/echo "${sendMsg}" | /usr/bin/jq ".ok")"
-        if ! [[ "${msgStatus}" == "true" ]]; then
-            /bin/echo "Failed to send Telegram message:"
-            /bin/echo ""
-            /bin/echo "${sendMsg}" | /usr/bin/jq
-            /bin/echo ""
-        fi
-    fi
-fi
-}
+#############################
+##       Signal Traps      ##
+#############################
+trap "badExit SIGINT" INT
+trap "badExit SIGQUIT" QUIT
+trap "badExit SIGKILL" KILL
 
-panicExit () {
-/bin/echo "Panic code: ${1}" >> "${lockFile}"
-/bin/echo "Captive DNS is: ${captiveDNS}" >> "${lockFile}"
-set >> "${lockFile}"
-eventText="<b>$(</etc/hostname) Captive DNS Script</b>$(printf "\r\n\r\n\r\n")Unexpected output from ${0}$(printf "\r\n\r\n\r\n")Reference ${lockFile}$(printf "\r\n\r\n")Debug code: ${1}"
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
-    sendMsg="$(/usr/bin/curl -skL --header "Host: api.telegram.org" --data-urlencode "text=${eventText}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${telegramChannelId}&parse_mode=html" 2>&1)"
-    if [[ "${?}" -ne "0" ]]; then
-        /bin/echo "API call to Telegram failed"
-    else
-        # Check to make sure Telegram returned a true value for ok
-        msgStatus="$(/bin/echo "${sendMsg}" | /usr/bin/jq ".ok")"
-        if ! [[ "${msgStatus}" == "true" ]]; then
-            /bin/echo "Failed to send Telegram message:"
-            /bin/echo ""
-            /bin/echo "${sendMsg}" | /usr/bin/jq
-            /bin/echo ""
-        fi
-    fi
+#############################
+##   Initiate .env file    ##
+#############################
+source "${realPath%/*}/${scriptName%.bash}.env"
+varFail="0"
+# Standard checks
+if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Option to check for updates not valid. Assuming no."
+    updateCheck="No"
 fi
-# Panic set DNS to Tertiary so internet can still work if DNS is down
-removeRules;
-addRules "${tertiaryDNS}" "${tertiaryDNS}";
-/bin/cp "${lockFile}" "${lockFile}.${$}"
-/bin/mv "${realPath%/*}/.${scriptName}.stdout" "${realPath%/*}/.${scriptName}.stdout.${$}"
-/bin/mv "${realPath%/*}/.${scriptName}.stderr" "${realPath%/*}/.${scriptName}.stderr.${$}"
-exit "${1}"
-}
+if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Invalid output verbosity defined. Assuming level 1 (Errors only)"
+    outputVerbosity="1"
+fi
 
+# Config specific checks
+if ! [[ "${allowedDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    printOutput "1" "Allowed DNS (${allowedDNS}) is not a valid IP address or CIDR range"
+    varFail="1"
+fi
+if ! [[ "${primaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    printOutput "1" "Primary DNS (${primaryDNS}) is not a valid IP address"
+    varFail="1"
+fi
+if [[ -z "${secondaryDNS}" ]]; then
+    printOutput "1" "No Secondary DNS defined, falling back to Tertiary DNS"
+    secondaryDNS="${tertiaryDNS}"
+elif ! [[ "${secondaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    printOutput "1" "Secondary DNS (${secondaryDNS}) is not a valid IP address"
+    varFail="1"
+fi
+if ! [[ "${tertiaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    printOutput "1" "Tertiary DNS (${tertiaryDNS}) is not a valid IP address"
+    varFail="1"
+fi
+if ! [[ "${dnsPort}" =~ ^[0-9]{1,5}$ ]]; then
+    printOutput "1" "DNS Port (${dnsPort}) is not a valid port number"
+    varFail="1"
+fi
+if ! [[ "${testDomain}" =~ ^([a-z0-9]{1,60}\.)+[a-z]{2,3}$ ]]; then
+    printOutput "1" "Address to test DNS (${testDomain}) is not a valid domain"
+    varFail="1"
+fi
+if [[ "${#vlanInterfaces[@]}" -eq "0" ]]; then
+    printOutput "1" "No VLAN interfaces defined"
+    varFail="1"
+else
+    for i in "${vlanInterfaces[@]}"; do
+        if ! [[ "${i}" =~ ^br[0-9]+$ ]]; then
+            printOutput "1" "${i} does not appear to be a valid VLAN interface"
+            varFail="1"
+        fi
+    done
+fi
+
+# Quit if failures
+if [[ "${varFail}" -eq "1" ]]; then
+    badExit "10" "Please fix above errors"
+fi
+
+#############################
+##  Positional parameters  ##
+#############################
+# We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
     "-h"|"--help")
-        /bin/echo "-h  --help      Displays this help message"
-        /bin/echo ""
-        /bin/echo "-u  --update    Self update to the most recent version"
-        /bin/echo ""
-        /bin/echo "-r  --rules     Displays current captive DNS rules"
-        /bin/echo ""
-        /bin/echo "-d  --delete    Deletes current captive DNS rules,"
-        /bin/echo "                and does not replace them with anything"
-        /bin/echo ""
-        /bin/echo "-s  --set       Removes any rules which may exist, and"
-        /bin/echo "                then sets new rules for captive DNS"
-        /bin/echo "                Usage: -s <1> <2>"
-        /bin/echo "                Where <1> is the captive DNS IP address"
-        /bin/echo "                and <2> is the allowed DNS CIDR/IP"
-        /bin/echo ""
-        /bin/echo "--install       Installs script to cron, executing it"
-        /bin/echo "                once every minute. Also installs it to"
-        /bin/echo "                the on_boot.d/ directory, to persist"
-        /bin/echo "                across reboots"
-        /bin/echo ""
-        /bin/echo "--uninstall     Removes the script from cron"
-        /bin/rm -f "${lockFile}"
-        exit 0
+        echo "-h  --help      Displays this help message"
+        echo ""
+        echo "-u  --update    Self update to the most recent version"
+        echo ""
+        echo "-r  --rules     Displays current captive DNS rules"
+        echo ""
+        echo "-d  --delete    Deletes current captive DNS rules,"
+        echo "                and does not replace them with anything"
+        echo ""
+        echo "-s  --set       Removes any rules which may exist, and"
+        echo "                then sets new rules for captive DNS"
+        echo "                Usage: -s <1> <2>"
+        echo "                Where <1> is the captive DNS IP address"
+        echo "                and <2> is the allowed DNS CIDR/IP"
+        echo ""
+        echo "--install       Installs script to cron, executing it"
+        echo "                once every minute. Also installs it to"
+        echo "                the on_boot.d/ directory, to persist"
+        echo "                across reboots"
+        echo ""
+        echo "--uninstall     Removes the script from cron"
+        cleanExit "silent"
     ;;
     "-u"|"--update")
-        /usr/bin/curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash" -o "${0}"
-        chmod +x "${0}"
-        /bin/rm -f "${lockFile}"
-        exit 0
+        if curl -skL "${updateURL}" -o "${0}"; then
+            if chmod +x "${0}"; then
+                echo "Update complete"
+                exit 0
+            else
+                echo "Update downloaded, but unable to `chmod +x`"
+                exit 255
+            fi
+        else
+            echo "Unable to download update"
+            exit 255
+        fi
     ;;
     "-r"|"--rules")
-        /usr/sbin/iptables -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
-        /bin/rm -f "${lockFile}"
-        exit 0
+        iptables -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
+        cleanExit "silent"
     ;;
     "-d"|"--delete")
         removeRules;
-        /bin/rm -f "${lockFile}"
-        exit 0
+        cleanExit
     ;;
     "-s"|"--set")
         shift
         removeRules;
         addRules "${1}" "${2}";
-        /bin/rm -f "${lockFile}"
-        exit 0
+        cleanExit
     ;;
     "--install")
-        /bin/echo "* * * * * root ${realPath%/*}/${scriptName} > ${realPath%/*}/.${scriptName}.stdout" > "/etc/cron.d/${scriptName%.bash}"
+        echo "* * * * * root ${realPath%/*}/${scriptName}" > "/etc/cron.d/${scriptName%.bash}"
         /etc/init.d/cron restart
-        /bin/echo "#!/bin/sh" > "/data/on_boot.d/10-captive-dns.sh"
-        /bin/echo "/bin/echo \"* * * * * root ${realPath%/*}/${scriptName} > ${realPath%/*}/.${scriptName}.stdout\" > \"/etc/cron.d/${scriptName%.bash}\"" >> "/data/on_boot.d/10-captive-dns.sh"
+        echo "#!sh" > "/data/on_boot.d/10-captive-dns.sh"
+        echo "echo \"* * * * * root ${realPath%/*}/${scriptName}" >> "/data/on_boot.d/10-captive-dns.sh"
         chmod +x "/data/on_boot.d/10-captive-dns.sh"
-        /bin/rm -f "${lockFile}"
-        exit 0
+        cleanExit "silent"
     ;;
     "--uninstall")
-        /bin/rm -f "/etc/cron.d/${scriptName%.bash}" "/data/on_boot.d/10-captive-dns.sh"
+        rm -f "/etc/cron.d/${scriptName%.bash}" "/data/on_boot.d/10-captive-dns.sh"
         /etc/init.d/cron restart
-        /bin/rm -f "${lockFile}"
-        exit 0
+        cleanExit "silent"
     ;;
 esac
 
-## General source begins here
-
-# Get config options
-source "${realPath%/*}/${scriptName%.bash}.env"
-
-configFail="0"
-# Are our config options valid?
-if ! [[ "${allowedDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    /bin/echo "Allowed DNS (${allowedDNS}) is not a valid IP address or CIDR range"
-    configFail="1"
-fi
-if ! [[ "${primaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    /bin/echo "Primary DNS (${primaryDNS}) is not a valid IP address"
-    configFail="1"
-fi
-if ! [[ "${secondaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    /bin/echo "Secondary DNS (${secondaryDNS}) is not a valid IP address"
-    configFail="1"
-fi
-if ! [[ "${tertiaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    /bin/echo "Tertiary DNS (${tertiaryDNS}) is not a valid IP address"
-    configFail="1"
-fi
-if ! [[ "${dnsPort}" =~ ^[0-9]{1,5}$ ]]; then
-    /bin/echo "DNS Port (${dnsPort}) is not a valid port number"
-    configFail="1"
-fi
-if ! [[ "${testDNS}" =~ ^([a-z0-9]{1,60}\.)+[a-z]{2,3}$ ]]; then
-    /bin/echo "Address to test DNS (${testDNS}) is not a valid top level domain"
-    configFail="1"
-fi
-if [[ "${#vlanInterfaces[@]}" -eq "0" ]]; then
-    /bin/echo "No VLAN interfaces defined"
-    configFail="1"
-else
-    for i in "${vlanInterfaces[@]}"; do
-        if ! [[ "${i}" =~ ^br[0-9]+$ ]]; then
-            /bin/echo "${i} does not appear to be a valid VLAN interface"
-            configFail="1"
-        fi
-    done
-fi
-if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
-    /bin/echo "Option to check for updates not valid. Assuming no."
-    updateCheck="No"
-fi
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
-    telegramOutput="$(/usr/bin/curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
-    curlExitCode="${?}"
-    if [[ "${curlExitCode}" -ne "0" ]]; then
-        /bin/echo "Curl to Telegram to check Bot ID returned a non-zero exit code"
-        configFail="1"
-    elif [[ -z "${telegramOutput}" ]]; then
-        /bin/echo "Curl to Telegram to check Bot ID returned an empty string"
-        configFail="1"
-    fi
-    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        /bin/echo "Telegram API check for bot failed"
-        configFail="1"
-    else
-        telegramOutput="$(/usr/bin/curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
-        curlExitCode="${?}"
-        if [[ "${curlExitCode}" -ne "0" ]]; then
-            /bin/echo "Curl to Telegram to check channel returned a non-zero exit code"
-            configFail="1"
-        elif [[ -z "${telegramOutput}" ]]; then
-            /bin/echo "Curl to Telegram to check channel returned an empty string"
-            configFail="1"
-        fi
-        if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-            /bin/echo "Telegram API check for channel failed"
-            configFail="1"
-        fi
-    fi
-fi
-if [[ "${configFail}" -eq "1" ]]; then
-    /bin/echo "Please fix config file: ${realPath%/*}/${scriptName%.bash}.env"
-    /bin/rm -f "${lockFile}"
-    exit 1
-fi
-
-# Is the internet reachable?
-/bin/echo "Verifying internet connectivity"
-if ! /bin/ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
-    /bin/echo "Internet appears to be offline"
-    # It appears that it is not
-    /bin/rm -f "${lockFile}"
-    exit 0
-fi
-
-# Are we allowed to check for updates?
+#############################
+##       Update check      ##
+#############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
-    newest="$(/usr/bin/curl -skL "https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash" | /usr/bin/md5sum | /usr/bin/awk '{print $1}')"
-    current="$(/usr/bin/md5sum "${0}" | /usr/bin/awk '{print $1}')"
+    newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
+    current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
-        /bin/echo "A newer version is available"
+        # Although it's not an error, we should always be allowed to print this message if update checks are allowed, so giving it priority 1
+        printOutput "1" "A newer version is available"
+    else
+        printOutput "2" "No new updates available"
     fi
+fi
+
+#############################
+##         Payload         ##
+#############################
+printOutput "2" "Verifying internet connectivity"
+if ! ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
+    # It appears that it is not
+    badExit "11" "Internet appears to be offline"
+else
+    printOutput "3" "Internet connectivity verified"
 fi
 
 # We read this into an array as a cheap way of counting the number of results. It should only be zero or one.
-readarray -t captiveDNS < <(/usr/sbin/iptables -n -t nat --list PREROUTING | /bin/grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /bin/grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | /usr/bin/sort -u)
+readarray -t captiveDNS < <(iptables -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
 if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     # No rules are set
+    printOutput "3" "No DNS rules detected"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
         addRules "${primaryDNS}" "${allowedDNS}";
-        tgMsg "null [None set]" "primary [${primaryDNS}]";
+        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to primary [${primaryDNS}]"
+        sendTelegramMessage
     else
         # Primary test failed. Test secondary.
         if testDNS "${secondaryDNS}"; then
             # Secondary test succeded
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            tgMsg "null [None set]" "secondary [${secondaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to secondary [${secondaryDNS}]"
+            sendTelegramMessage
         else
             # Secondary test failed
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            tgMsg "null [None set]" "tertiary [${tertiaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage
         fi
     fi
 elif [[ "${#captiveDNS[@]}" -ge "2" ]]; then
     # There is more than one result. This should not happen.
-    panicExit 1;
+    badExit "0" "More than one captive DNS entry found";
 elif [[ "${captiveDNS[0]}" == "${primaryDNS}" ]]; then
     # Captive DNS is Primary
+    printOutput "3" "Captive DNS is Primary DNS: ${primaryDNS}"
+    printOutput "2" "Testing Primary DNS server: ${primaryDNS}"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
-        /bin/rm -f "${lockFile}"
-        exit 0
+        printOutput "2" "Primary DNS check succeeded"
+        cleanExit
     else
         # Primary test failed. Test secondary.
+        printOutput "1" "Primary DNS check failed"
+        printOutput "2" "Testing Secondary DNS server: ${secondaryDNS}"
         if testDNS "${secondaryDNS}"; then
             # Secondary test succeded
+            printOutput "2" "Secondary DNS check succeeded"
             removeRules;
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            tgMsg "primary [${primaryDNS}]" "secondary [${secondaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from primary [${primaryDNS}] to secondary [${secondaryDNS}]"
+            sendTelegramMessage
         else
             # Secondary test failed
+            printOutput "1" "Secondary DNS check failed"
             removeRules;
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            tgMsg "primary [${primaryDNS}]" "tertiary [${tertiaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from primary [${primaryDNS}] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage
         fi
     fi
 elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
     # Captive DNS is Secondary
+    printOutput "3" "Captive DNS is Secondary DNS: ${secondaryDNS}"
+    printOutput "2" "Testing Primary DNS server: ${primaryDNS}"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
+        printOutput "2" "Primary DNS check succeeded"
         removeRules;
         addRules "${primaryDNS}" "${allowedDNS}";
-        tgMsg "secondary [${secondaryDNS}]" "primary [${primaryDNS}]";
+        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from secondary [${secondaryDNS}] to primary [${primaryDNS}]"
+        sendTelegramMessage
     else
         # Primary test failed. Test secondary.
+        printOutput "1" "Primary DNS check failed"
+        printOutput "2" "Testing Secondary DNS server: ${secondaryDNS}"
         if testDNS "${secondaryDNS}"; then
             # Secondary test succeded
-            /bin/rm -f "${lockFile}"
-            exit 0
+            printOutput "2" "Secondary DNS check succeeded"
+            cleanExit
         else
             # Secondary test failed
+            printOutput "1" "Secondary DNS check failed"
             removeRules;
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            tgMsg "secondary [${secondaryDNS}]" "tertiary [${tertiaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from secondary [${secondaryDNS}] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage
         fi
     fi
 elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
     # Captive DNS is Tertiary
+    printOutput "3" "Captive DNS is Tertiary DNS: ${tertiaryDNS}"
+    printOutput "2" "Testing Primary DNS server: ${primaryDNS}"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
+        printOutput "2" "Primary DNS check succeeded"
         removeRules;
         addRules "${primaryDNS}" "${allowedDNS}";
-        tgMsg "tertiary [${tertiaryDNS}]" "primary [${primaryDNS}]";
+        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from tertiary [${tertiaryDNS}] to primary [${primaryDNS}]"
+        sendTelegramMessage
     else
         # Primary test failed. Test secondary.
+        printOutput "1" "Primary DNS check failed"
+        printOutput "2" "Testing Secondary DNS server: ${secondaryDNS}"
         if testDNS "${secondaryDNS}"; then
             # Secondary test succeded
+            printOutput "2" "Secondary DNS check succeeded"
             removeRules;
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            tgMsg "tertiary [${tertiaryDNS}]" "secondary [${secondaryDNS}]";
+            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from tertiary [${tertiaryDNS}] to secondary [${secondaryDNS}]"
+            sendTelegramMessage
         else
             # Secondary test failed
-            /bin/rm -f "${lockFile}"
-            exit 0
+            printOutput "1" "Secondary DNS check failed"
+            cleanExit
         fi
     fi
 else
     # One set of rules exist, but it's not Primary, Secondary, or Tertiary - We should never reach this
-    panicExit 2;
+    badExit "0" "Rules do not match any known DNS server: ${captiveDNS[0]}";
 fi
 
-/bin/rm -f "${lockFile}"
-exit 0
+#############################
+##       End of file       ##
+#############################
+cleanExit
