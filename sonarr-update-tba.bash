@@ -253,11 +253,11 @@ source "${realPath%/*}/${scriptName%.bash}.env"
 varFail="0"
 # Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
-    echo "Option to check for updates not valid. Assuming no."
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
 if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
-    echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
 
