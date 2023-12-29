@@ -45,6 +45,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-12-29
+# Added a sort to TBA items that are found, because I like it when the output is sorted.
+# Also fixed a bug causing files already renamed to not have their correct new name called for the Telegram annoucement/script output
 # 2023-11-27
 # Fleshed out support for Sonarr v4 due to requests being malformed in the POST command API calls (HUGE thanks to @StevieTV helping me with the fix)
 # Narrowed the 'find' command to only find video formats supported by Plex
