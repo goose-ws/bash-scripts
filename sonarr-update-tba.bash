@@ -434,7 +434,7 @@ for containerName in "${containers[@]}"; do
             printOutput "3" "Found item: ${ii}"
             files+=("${i}:${ii}")
             (( matches++ ))
-        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$")
+        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
         printOutput "2" "Detected ${matches} TBA items"
     done
 
@@ -457,6 +457,12 @@ for containerName in "${containers[@]}"; do
                 fileExists="1"
             fi
         done
+        # Define the season and episode numbers
+        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
+        epCode="${epCode// - /}"
+        fileSeasonNum="${epCode%E*}"
+        fileSeasonNum="${fileSeasonNum#S}"
+        fileEpisodeNum="${epCode#*E}"
         if [[ "${fileExists}" -eq "1" ]]; then
             printOutput "2" "Initiating series rename command"
             # Find the series ID by searching for a series with the matching path
@@ -498,12 +504,6 @@ for containerName in "${containers[@]}"; do
                 badExit "20" "More than one matched series ID for file: ${file}"
             fi
             
-            # Verify that the episode name is actually TBA
-            epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-            epCode="${epCode// - /}"
-            fileSeasonNum="${epCode%E*}"
-            fileSeasonNum="${fileSeasonNum#S}"
-            fileEpisodeNum="${epCode#*E}"
             # Refresh the series
             printOutput "2" "Issuing refresh command for: ${seriesTitle}"
             commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
@@ -557,6 +557,8 @@ for containerName in "${containers[@]}"; do
                 printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                 sleep 15
             fi
+        else
+            printOutput "3" "File does not exist at same path, appears to have been renamed"
         fi
         # Check to see if rename happened
         printOutput "3" "Verifying file rename status"
@@ -577,7 +579,7 @@ for containerName in "${containers[@]}"; do
             # In case the episode name is an illegal file name, such as The Changeling S01E03.
             # Probably no longer necessary since moving to asking Sonarr for the title, instead of the file system
             if [[ -z "${newEpName}" ]]; then
-                newEpName="[null]"
+                newEpName="[Unable to retrieve]"
             fi
             msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
             printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
@@ -599,7 +601,7 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
         containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${plexContainer}")"
         printOutput "3" "Networking type: ${containerNetworking}"
         if [[ -z "${containerNetworking}" ]]; then
-            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            printOutput "2" "No network type defined -- Checking to see if networking is through another container"
             # IP address returned blank. Is it being networked through another container?
             containerIp="$(docker inspect "${plexContainer}" | jq -M -r ".[].HostConfig.NetworkMode")"
             containerIp="${containerIp#\"}"
@@ -607,7 +609,7 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
             printOutput "3" "Network mode: ${containerIp%%:*}"
             if [[ "${containerIp%%:*}" == "container" ]]; then
                 # Networking is being run through another container. So we need that container's IP address.
-                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                printOutput "2" "Networking routed through another container -- Retrieving IP address"
                 containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
             else
                 printOutput "1" "Unable to determine networking type"
