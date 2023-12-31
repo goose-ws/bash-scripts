@@ -24,6 +24,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2023-12-30
+# Defined some paths, as iptables isn't in the default ${PATH} for sh
+# Fixed some logic regarding persisting across restarts
 # 2023-12-15
 # Updated formatting and output to my "new standard"
 # 2023-02-16
