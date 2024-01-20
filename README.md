@@ -55,9 +55,12 @@ Scripts here include:
 
 ### Todo
 
+- [ ] Updated Telegram sending function to support super groups, silent notifications
+- [ ] Update Docker container IP address detection to deal with containers with multiple networking types
 - [ ] Re-write [sonarr-group-notifications.bash](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-group-notifications.bash) to new standard, and to fix its behavior
 - [ ] Update [linode-dynamic-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.bash) to new standard
 - [ ] Update [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) to destroy/re-create the container, rather than just restart it (helps clean up old/unnecessary files)
+- [ ] Update [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) to offer to use ChuckPA's database repair/optimization tool between updates
 
 ### Done ✓
 
