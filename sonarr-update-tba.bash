@@ -45,6 +45,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-01-23
+# Added support for when a container has multiple networks attached (Multiple IP addresses)
+# Updated the logic for sending Telegram messages to make sure the bot can authenticate to each channel
+# Added support for super groups, silent messages (See updated .env file)
 # 2023-12-29
 # Added a sort to TBA items that are found, because I like it when the output is sorted.
 # Also fixed a bug causing files already renamed to not have their correct new name called for the Telegram annoucement/script output
@@ -203,39 +207,39 @@ if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
     badExit "3" "Telegram bot API check failed"
 else
     printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
-    telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
-    curlExitCode="${?}"
-    if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
-    elif [[ -z "${telegramOutput}" ]]; then
-        badExit "5" "Curl to Telegram to check channel returned an empty string"
-    else
-        printOutput "3" "Curl exit code and null output checks passed"
-    fi
-    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        badExit "6" "Telegram channel check failed"
-    else
-        printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
-    fi
-fi
-for chanId in "${telegramChannelId[@]}"; do
-    telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
-    curlExitCode="${?}"
-    if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
-    else
-        printOutput "3" "Curl returned zero exit code"
-        # Check to make sure Telegram returned a true value for ok
-        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
-            printOutput "1" "Failed to send Telegram message:"
-            printOutput "1" ""
-            printOutput "1" "$(jq . <<<"${telegramOutput}")"
-            printOutput "1" ""
+    for chanId in "${telegramChannelId[@]}"; do
+        telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+        curlExitCode="${?}"
+        if [[ "${curlExitCode}" -ne "0" ]]; then
+            badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+        elif [[ -z "${telegramOutput}" ]]; then
+            badExit "5" "Curl to Telegram to check channel returned an empty string"
         else
-            printOutput "2" "Telegram message sent successfully"
+            printOutput "3" "Curl exit code and null output checks passed"
         fi
-    fi
-done
+        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+            badExit "6" "Telegram channel check failed"
+        else
+            printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
+        fi
+        telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+        curlExitCode="${?}"
+        if [[ "${curlExitCode}" -ne "0" ]]; then
+            badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+        else
+            printOutput "3" "Curl returned zero exit code"
+            # Check to make sure Telegram returned a true value for ok
+            if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+                printOutput "1" "Failed to send Telegram message:"
+                printOutput "1" ""
+                printOutput "1" "$(jq . <<<"${telegramOutput}")"
+                printOutput "1" ""
+            else
+                printOutput "2" "Telegram message sent successfully"
+            fi
+        fi
+    done
+fi
 }
 
 #############################
@@ -306,35 +310,47 @@ for containerName in "${containers[@]}"; do
     # Get Sonarr IP address
     printOutput "2" "Attempting to automatically determine container IP address"
     # Find the type of networking the container is using
-    containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${containerName}")"
-    if [[ -z "${containerNetworking}" ]]; then
-        printOutput "2" "No network type defined. Checking to see if networking is through another container."
-        # IP address returned blank. Is it being networked through another container?
-        containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
-        containerIp="${containerIp#\"}"
-        containerIp="${containerIp%\"}"
-        printOutput "3" "Network mode: ${containerIp%%:*}"
-        if [[ "${containerIp%%:*}" == "container" ]]; then
-            # Networking is being run through another container. So we need that container's IP address.
-            printOutput "2" "Networking routed through another container. Retrieving IP address."
-            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
-        else
-            printOutput "1" "Unable to determine networking type"
-            unset containerIp
+    unset containerNetworking
+    while read i; do
+        if [[ -n "${i}" ]]; then
+            containerNetworking+=("${i}")
         fi
-    elif [[ "${containerNetworking}" == "host" ]]; then
-        # Host networking, so we can probably use localhost
-        printOutput "3" "Networking type: ${containerNetworking}"
-        containerIp="127.0.0.1"
-    else
-        # Something else. Let's see if we can get it via inspect.
-        printOutput "3" "Networking type: ${containerNetworking}"
-        containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerName}")"
-    fi
+    done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${containerName}")
+    printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+    for i in "${containerNetworking[@]}"; do
+        if [[ -z "${i}" ]]; then
+            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            # IP address returned blank. Is it being networked through another container?
+            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
+            containerIp="${containerIp#\"}"
+            containerIp="${containerIp%\"}"
+            printOutput "3" "Network mode: ${containerIp%%:*}"
+            if [[ "${containerIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+            else
+                printOutput "1" "Unable to determine networking type"
+                unset containerIp
+            fi
+        elif [[ "${i}" == "host" ]]; then
+            # Host networking, so we can probably use localhost
+            printOutput "3" "Networking type: ${i}"
+            containerIp="127.0.0.1"
+        else
+            # Something else. Let's see if we can get it via inspect.
+            printOutput "3" "Other networking type: ${i}"
+            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
+        fi
+        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+            printOutput "1" "Unable to determine IP address via networking mode: ${i}"
+        else
+            printOutput "2" "Container IP address: ${containerIp}"
+            break
+        fi
+    done
     if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
         badExit "10" "Unable to determine IP address"
-    else
-        printOutput "2" "Container IP address: ${containerIp}"
     fi
 
     # Read Sonarr config file
@@ -343,7 +359,6 @@ for containerName in "${containers[@]}"; do
         badExit "11" "Failed to read Sonarr config file"
     else
         printOutput "2" "Configuration file retrieved"
-        #printOutput "3" "File contents:$(printf "\r\n\r\n")${sonarrConfig}"
     fi
 
     # Get Sonarr port from config file
