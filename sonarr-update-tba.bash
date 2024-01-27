@@ -45,10 +45,12 @@
 #############################
 ##        Changelog        ##
 #############################
-# 2024-01-23
+# 2024-01-27
+# Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
 # Updated the logic for sending Telegram messages to make sure the bot can authenticate to each channel
 # Added support for super groups, silent messages (See updated .env file)
+# Added support for sending error messages via telegram (See updated .env file)
 # 2023-12-29
 # Added a sort to TBA items that are found, because I like it when the output is sorted.
 # Also fixed a bug causing files already renamed to not have their correct new name called for the Telegram annoucement/script output
@@ -90,6 +92,10 @@
 #############################
 ##      Sanity checks      ##
 #############################
+if ! [ -e "/bin/bash" ]; then
+    echo "This script requires Bash"
+    exit 255
+fi
 if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
@@ -118,43 +124,18 @@ scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/sonarr-update-tba.bash"
-
-#############################
-##  Positional parameters  ##
-#############################
-# We can run the positional parameter options without worrying about lockFile
-case "${1,,}" in
-    "-h"|"--help")
-        echo "-h  --help      Displays this help message"
-        echo ""
-        echo "-u  --update    Self update to the most recent version"
-        exit 0
-    ;;
-    "-u"|"--update")
-        if curl -skL "${updateURL}" -o "${0}"; then
-            if chmod +x "${0}"; then
-                echo "Update complete"
-                exit 0
-            else
-                echo "Update downloaded, but unable to 'chmod +x'"
-                exit 255
-            fi
-        else
-            echo "Unable to download update"
-            exit 255
-        fi
-    ;;
-esac
+# For ease of printing messages
+lineBreak="$(printf "\r\n\r\n")"
 
 #############################
 ##         Lockfile        ##
 #############################
 if [[ -e "${lockFile}" ]]; then
-    if kill -s 0 "$(<"${lockfile}")"; then
+    if kill -s 0 "$(<"${lockFile}")" > /dev/null 2>&1; then
         echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
         exit 0
     else
-        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockfile}")"
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockFile}")"
     fi
 fi
 echo "${$}" > "${lockFile}"
@@ -163,8 +144,14 @@ echo "${$}" > "${lockFile}"
 ##    Standard Functions   ##
 #############################
 function printOutput {
+case "${1}" in
+    0) logLevel="[reqrd]";; # Required
+    1) logLevel="[error]";; # Errors
+    2) logLevel="[info] ";; # Informational
+    3) logLevel="[verb] ";; # Verbose
+esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
-    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
 fi
 }
 
@@ -177,11 +164,14 @@ fi
 }
 
 function badExit {
-    removeLock
+removeLock
 if [[ -z "${2}" ]]; then
     printOutput "0" "Received signal: ${1}"
     exit "255"
 else
+    if [[ "${telegramErrorMessages,,}" =~ ^(yes|true)$ ]]; then
+        sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}Error Code ${1}:${lineBreak}${2}" "${telegramErrorChannel}"
+    fi
     printOutput "1" "${2}"
     exit "${1}"
 fi
@@ -193,52 +183,80 @@ exit 0
 }
 
 function sendTelegramMessage {
+# Message to send should be passed as function positional parameter #1
+# We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
 # Let's check to make sure our messaging credentials are valid
+skipTelegram="0"
 telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    printOutput "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    skipTelegram="1"
 elif [[ -z "${telegramOutput}" ]]; then
-    badExit "2" "Curl to Telegram to check Bot ID returned an empty string"
+    printOutput "1" "Curl to Telegram to check Bot ID returned an empty string"
+    skipTelegram="1"
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
-if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-    badExit "3" "Telegram bot API check failed"
-else
-    printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
-    for chanId in "${telegramChannelId[@]}"; do
-        telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
-        curlExitCode="${?}"
-        if [[ "${curlExitCode}" -ne "0" ]]; then
-            badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
-        elif [[ -z "${telegramOutput}" ]]; then
-            badExit "5" "Curl to Telegram to check channel returned an empty string"
-        else
-            printOutput "3" "Curl exit code and null output checks passed"
-        fi
-        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-            badExit "6" "Telegram channel check failed"
-        else
-            printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
-        fi
-        telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
-        curlExitCode="${?}"
-        if [[ "${curlExitCode}" -ne "0" ]]; then
-            badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
-        else
-            printOutput "3" "Curl returned zero exit code"
-            # Check to make sure Telegram returned a true value for ok
-            if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
-                printOutput "1" "Failed to send Telegram message:"
-                printOutput "1" ""
-                printOutput "1" "$(jq . <<<"${telegramOutput}")"
-                printOutput "1" ""
-            else
-                printOutput "2" "Telegram message sent successfully"
+if [[ "${skipTelegram}" -eq "0" ]]; then
+    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+        printOutput "1" "Telegram bot API check failed"
+    else
+        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+        for chanId in "${telegramChannelId[@]}"; do
+            if [[ -n "${2}" ]]; then
+                chanId="${2}"
             fi
-        fi
-    done
+            telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+            curlExitCode="${?}"
+            if [[ "${curlExitCode}" -ne "0" ]]; then
+                printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+            elif [[ -z "${telegramOutput}" ]]; then
+                printOutput "1" "Curl to Telegram to check channel returned an empty string"
+            elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+                printOutput "3" "Curl exit code and null output checks passed"
+                printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
+                telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+                curlExitCode="${?}"
+                if [[ "${curlExitCode}" -ne "0" ]]; then
+                    printOutput "1" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+                elif [[ -z "${telegramOutput}" ]]; then
+                    printOutput "1" "Curl to Telegram to send message returned an empty string"
+                else
+                    printOutput "3" "Curl exit code and null output checks passed"
+                    # Check to make sure Telegram returned a true value for ok
+                    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+                        printOutput "1" "Failed to send Telegram message:"
+                        printOutput "1" ""
+                        while read -r i; do
+                            printOutput "1" "${i}"
+                        done < <(jq . <<<"${telegramOutput}")
+                        printOutput "1" ""
+                    else
+                        printOutput "2" "Telegram message sent successfully"
+                    fi
+                fi
+            else
+                printOutput "1" "Telegram channel check failed"
+            fi
+            if [[ -n "${2}" ]]; then
+                break
+            fi
+        done
+    fi
+fi
+}
+
+function callCurl {
+# URL to call should be $1
+curlOutput="$(curl -skL -H "Authorization: Bearer ${apiKey}" "${1}" 2>&1)"
+curlExitCode="${?}"
+if [[ "${curlExitCode}" -ne "0" ]]; then
+    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
+    while read -r i; do
+        printOutput "1" "Output: ${i}"
+    done <<<"${curlOutput}"
+    badExit "1" "Bad curl output"
 fi
 }
 
@@ -254,9 +272,71 @@ trap "badExit SIGQUIT" QUIT
 trap "badExit SIGKILL" KILL
 
 #############################
+##  Positional parameters  ##
+#############################
+# We can run the positional parameter options without worrying about lockFile
+case "${1,,}" in
+    "-h"|"--help")
+        echo "-h  --help      Displays this help message"
+        echo ""
+        echo "-u  --update    Self update to the most recent version"
+        exit 0
+    ;;
+    "-u"|"--Update")
+        oldStartLine="0"
+        while read -r i; do
+            if [[ "${i}" == "##        Changelog        ##" ]]; then
+                oldStartLine="1"
+            elif [[ "${oldStartLine}" -eq "1" ]]; then
+                oldStartLine="2"
+            elif [[ "${oldStartLine}" -eq "2" ]]; then
+                oldStartLine="${i}"
+                break
+            fi
+        done < "${0}"
+        if curl -skL "${updateURL}" -o "${0}"; then
+            if chmod +x "${0}"; then
+                printOutput "1" "Update complete"
+                newStartLine="0"
+                while read -r i; do
+                    if [[ "${newStartLine}" -eq "2" ]]; then
+                        if [[ "${i}" == "${oldStartLine}" ]]; then
+                            break
+                        fi
+                        if [[ "${i:2:1}" =~ ^[0-9]$ ]]; then
+                            changelogArr+=(" ${i#\#}")
+                        else
+                            changelogArr+=("  - ${i#\#}")
+                        fi
+                    elif [[ "${newStartLine}" -eq "1" ]]; then
+                        newStartLine="2"
+                    elif [[ "${i}" == "##        Changelog        ##" ]]; then
+                        newStartLine="1"
+                    fi
+                done < <(curl -skL "${updateURL}")
+
+                printOutput "1"  "Changelog:"
+                for i in "${changelogArr[@]}"; do
+                    printOutput "1"  "${i}"
+                done
+                cleanExit
+            else
+                badExit "2" "Update downloaded, but unable to \`chmod +x\`"
+            fi
+        else
+            badExit "3" "Unable to download Update"
+        fi
+    ;;
+esac
+
+#############################
 ##   Initiate .env file    ##
 #############################
-source "${realPath%/*}/${scriptName%.bash}.env"
+if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
+    source "${realPath%/*}/${scriptName%.bash}.env"
+else
+    badExit "4" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+fi
 varFail="0"
 # Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
@@ -280,7 +360,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "8" "Please fix above errors"
+    badExit "5" "Please fix above errors"
 fi
 
 #############################
@@ -290,10 +370,15 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
-        # Although it's not an error, we should always be allowed to print this message if update checks are allowed, so giving it priority 1
-        printOutput "1" "A newer version is available"
+        printOutput "0" "A newer version is available"
+        # If our ${TERM} is dumb, we're probably running via cron, and should push a message to Telegram, if allowed
+        if [[ "${TERM,,}" == "dumb" ]]; then
+            if [[ "${telegramErrorMessages}" =~ ^(yes|true)$ ]]; then
+                sendTelegramMessage "[${0##*/}] An update is available" "${telegramErrorChannel}"
+            fi
+        fi
     else
-        printOutput "2" "No new updates available"
+        printOutput "3" "No new updates available"
     fi
 fi
 
@@ -302,7 +387,7 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "9" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
+    badExit "6" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
 for containerName in "${containers[@]}"; do
@@ -350,13 +435,13 @@ for containerName in "${containers[@]}"; do
         fi
     done
     if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        badExit "10" "Unable to determine IP address"
+        badExit "7" "Unable to determine IP address"
     fi
 
     # Read Sonarr config file
     sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
     if [[ -z "${sonarrConfig}" ]]; then
-        badExit "11" "Failed to read Sonarr config file"
+        badExit "8" "Failed to read Sonarr config file"
     else
         printOutput "2" "Configuration file retrieved"
     fi
@@ -366,7 +451,7 @@ for containerName in "${containers[@]}"; do
     sonarrPort="${sonarrPort#<Port>}"
     sonarrPort="${sonarrPort%</Port>}"
     if ! [[ "${sonarrPort}" =~ ^[0-9]+$ ]]; then
-        badExit "12" "Failed to obtain port"
+        badExit "9" "Failed to obtain port"
     else
         printOutput "2" "Port retrieved from config file"
         printOutput "3" "Port: ${sonarrPort}"
@@ -377,7 +462,7 @@ for containerName in "${containers[@]}"; do
     sonarrApiKey="${sonarrApiKey#<ApiKey>}"
     sonarrApiKey="${sonarrApiKey%</ApiKey>}"
     if [[ -z "${sonarrApiKey}" ]]; then
-        badExit "13" "Failed to obtain API key"
+        badExit "10" "Failed to obtain API key"
     else
         printOutput "2" "API key retrieved from config file"
         printOutput "3" "API key: ${sonarrPort}"
@@ -400,9 +485,9 @@ for containerName in "${containers[@]}"; do
     apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "14" "Curl returned non-zero exit code: ${curlExitCode}"
+        badExit "11" "Curl returned non-zero exit code: ${curlExitCode}"
     elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
-        badExit "15" "Authorization failure: ${apiCheck}"
+        badExit "12" "Authorization failure: ${apiCheck}"
     else
         printOutput "2" "API authorization succeded"
     fi
@@ -419,7 +504,7 @@ for containerName in "${containers[@]}"; do
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
-        badExit "16" "Please create an issue for support with other API versions"
+        badExit "13" "Please create an issue for support with other API versions"
     fi
 
     # Retrieve Sonarr libraries via API
@@ -502,7 +587,7 @@ for containerName in "${containers[@]}"; do
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
             else
-                badExit "17" "Unable to determine series"
+                badExit "14" "Unable to determine series"
             fi
             # Get the title of the series
             seriesTitle="$(jq -M -r ".title" <<<"${series}")"
@@ -512,14 +597,14 @@ for containerName in "${containers[@]}"; do
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Determined series ID: ${seriesId[0]}"
             else
-                badExit "18" "Unable to determine series ID"
+                badExit "15" "Unable to determine series ID"
             fi
 
             # Ensure we only matched one series
             if [[ "${#seriesId[@]}" -eq "0" ]]; then
-                badExit "19" "Failed to match series ID for file: ${file}"
+                badExit "16" "Failed to match series ID for file: ${file}"
             elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-                badExit "20" "More than one matched series ID for file: ${file}"
+                badExit "17" "More than one matched series ID for file: ${file}"
             fi
             
             # Refresh the series
@@ -691,18 +776,18 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
     fi
 fi
 
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne "0" ]]; then
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -ne "0" ]]; then
     dockerHost="$(</etc/hostname)"
     if [[ "${outputVerbosity}" -ge "3" ]]; then
-    printOutput "3" "Counted ${#msgArr[@]} messages to send:"
+        printOutput "3" "Counted ${#msgArr[@]} messages to send:"
         for i in "${msgArr[@]}"; do
             printOutput "3" "- ${i}"
         done
     fi
-    eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>$(printf "\r\n\r\n")$(printf '%s\n' "${msgArr[@]}")"
+    eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
     printOutput "3" "Got hostname: ${dockerHost}"
-    printOutput "2" "Telegram messaging enabled -- Checking credentials"
-    sendTelegramMessage
+    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+    sendTelegramMessage "${eventText}"
 fi
 
 #############################
