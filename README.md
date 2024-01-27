@@ -32,7 +32,7 @@ Scripts here include:
 
 | `sonarr-group-notifications.bash` |
 | :---: |
-| A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications. **This script is currently undergoing a total rewrite, and will be available again...soon™** |
+| ~~A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications.~~ **This script is currently undergoing a total rewrite, and will be available again...soon™** |
 
 ---
 
