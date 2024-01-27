@@ -18,6 +18,14 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-01-27
+# Remove codecs from inside the container (Removed from .env)
+# Added support for ChuckPA's database repair tool
+# Added support for when a container has multiple networks attached (Multiple IP addresses)
+# Updated the logic for sending Telegram messages to make sure the bot can authenticate to each channel
+# Added support for super groups, silent messages (See updated .env file)
+# Added support for sending error messages via telegram (See updated .env file)
+# Added a changelog message for when users update
 # 2023-10-15
 # Fixed the lockfile logic
 # 2023-10-13
@@ -26,7 +34,7 @@
 # 2023-05-25
 # Added functionality to self determine container IP address
 # Added config options for verbosity
-# Both initiated via PR from ndoty
+# Both initiated via PR from @ndoty
 # 2023-03-16
 # Rewrite of old script, removal of old script, and initial commit of new script
 
@@ -41,6 +49,10 @@
 #############################
 ##      Sanity checks      ##
 #############################
+if ! [ -e "/bin/bash" ]; then
+    echo "This script requires Bash"
+    exit 255
+fi
 if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
@@ -69,54 +81,34 @@ scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/update-plex-in-docker.bash"
-
-#############################
-##  Positional parameters  ##
-#############################
-# We can run the positional parameter options without worrying about lockFile
-case "${1,,}" in
-    "-h"|"--help")
-        echo "-h  --help      Displays this help message"
-        echo ""
-        echo "-u  --update    Self update to the most recent version"
-        exit 0
-    ;;
-    "-u"|"--update")
-        if curl -skL "${updateURL}" -o "${0}"; then
-            if chmod +x "${0}"; then
-                echo "Update complete"
-                exit 0
-            else
-                echo "Update downloaded, but unable to `chmod +x`"
-                exit 255
-            fi
-        else
-            echo "Unable to download update"
-            exit 255
-        fi
-    ;;
-esac
+# For ease of printing messages
+lineBreak="$(printf "\r\n\r\n")"
 
 #############################
 ##         Lockfile        ##
 #############################
 if [[ -e "${lockFile}" ]]; then
-exit 0
-else
-echo "PID: ${$}
-PWD: $(/bin/pwd)
-Date: $(/bin/date)
-RealPath: ${realPath}
-\${@}: ${@}
-\${#@}: ${#@}" > "${lockFile}"
+    if kill -s 0 "$(<"${lockFile}")" > /dev/null 2>&1; then
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
+        exit 0
+    else
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockFile}")"
+    fi
 fi
+echo "${$}" > "${lockFile}"
 
 #############################
 ##    Standard Functions   ##
 #############################
 function printOutput {
+case "${1}" in
+    0) logLevel="[reqrd]";; # Required
+    1) logLevel="[error]";; # Errors
+    2) logLevel="[info] ";; # Informational
+    3) logLevel="[verb] ";; # Verbose
+esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
-    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
 fi
 }
 
@@ -129,9 +121,17 @@ fi
 }
 
 function badExit {
-printOutput "1" "${2}"
 removeLock
-exit "${1}"
+if [[ -z "${2}" ]]; then
+    printOutput "0" "Received signal: ${1}"
+    exit "255"
+else
+    if [[ "${telegramErrorMessages,,}" =~ ^(yes|true)$ ]]; then
+        sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}Error Code ${1}:${lineBreak}${2}" "${telegramErrorChannel}"
+    fi
+    printOutput "1" "${2}"
+    exit "${1}"
+fi
 }
 
 function cleanExit {
@@ -140,53 +140,81 @@ exit 0
 }
 
 function sendTelegramMessage {
+# Message to send should be passed as function positional parameter #1
+# We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
 # Let's check to make sure our messaging credentials are valid
+skipTelegram="0"
 telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    printOutput "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+    skipTelegram="1"
 elif [[ -z "${telegramOutput}" ]]; then
-    badExit "2" "Curl to Telegram to check Bot ID returned an empty string"
+    printOutput "1" "Curl to Telegram to check Bot ID returned an empty string"
+    skipTelegram="1"
 else
     printOutput "3" "Curl exit code and null output checks passed"
 fi
-if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-    badExit "3" "Telegram bot API check failed"
-else
-    printOutput "2" "Telegram bot API key authenticated"
-    telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
-    curlExitCode="${?}"
-    if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "4" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
-    elif [[ -z "${telegramOutput}" ]]; then
-        badExit "5" "Curl to Telegram to check channel returned an empty string"
+if [[ "${skipTelegram}" -eq "0" ]]; then
+    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+        printOutput "1" "Telegram bot API check failed"
     else
-        printOutput "3" "Curl exit code and null output checks passed"
-    fi
-    if ! [[ "$(jq ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        badExit "6" "Telegram channel check failed"
-    else
-        printOutput "2" "Telegram channel authenticated"
+        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+        for chanId in "${telegramChannelId[@]}"; do
+            if [[ -n "${2}" ]]; then
+                chanId="${2}"
+            fi
+            telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+            curlExitCode="${?}"
+            if [[ "${curlExitCode}" -ne "0" ]]; then
+                printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+            elif [[ -z "${telegramOutput}" ]]; then
+                printOutput "1" "Curl to Telegram to check channel returned an empty string"
+            else
+                printOutput "3" "Curl exit code and null output checks passed"
+            fi
+            if [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+                printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
+                telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+                curlExitCode="${?}"
+                if [[ "${curlExitCode}" -ne "0" ]]; then
+                    printOutput "1" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+                elif [[ -z "${telegramOutput}" ]]; then
+                    printOutput "1" "Curl to Telegram to send message returned an empty string"
+                else
+                    printOutput "3" "Curl exit code and null output checks passed"
+                    # Check to make sure Telegram returned a true value for ok
+                    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+                        printOutput "1" "Failed to send Telegram message:"
+                        printOutput "1" ""
+                        printOutput "1" "$(jq . <<<"${telegramOutput}")"
+                        printOutput "1" ""
+                    else
+                        printOutput "2" "Telegram message sent successfully"
+                    fi
+                fi
+            else
+                printOutput "1" "Telegram channel check failed"
+            fi
+            if [[ -n "${2}" ]]; then
+                break
+            fi
+        done
     fi
 fi
-for chanId in "${telegramChannelId[@]}"; do
-    telegramOutput="$(curl -skL --data-urlencode "text=${eventText}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
-    curlExitCode="${?}"
-    if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "7" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
-    else
-        printOutput "3" "Curl returned zero exit code"
-        # Check to make sure Telegram returned a true value for ok
-        if ! [[ "$(jq ".ok" <<<"${telegramOutput}")" == "true" ]]; then
-            printOutput "1" "Failed to send Telegram message:"
-            printOutput "1" ""
-            printOutput "1" "$(jq . <<<"${telegramOutput}")"
-            printOutput "1" ""
-        else
-            printOutput "2" "Telegram message sent to channel ${chanId} successfully"
-        fi
-    fi
-done
+}
+
+function callCurl {
+# URL to call should be $1
+curlOutput="$(curl -skL -H "Authorization: Bearer ${apiKey}" "${1}" 2>&1)"
+curlExitCode="${?}"
+if [[ "${curlExitCode}" -ne "0" ]]; then
+    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
+    while read i; do
+        printOutput "1" "Output: ${i}"
+    done <<<"${curlOutput}"
+    badExit "1" "Bad curl output"
+fi
 }
 
 #############################
@@ -200,9 +228,78 @@ printOutput "3" "Now playing count: ${nowPlaying}"
 }
 
 #############################
+##       Signal Traps      ##
+#############################
+trap "badExit SIGINT" INT
+trap "badExit SIGQUIT" QUIT
+trap "badExit SIGKILL" KILL
+
+#############################
+##  Positional parameters  ##
+#############################
+# We can run the positional parameter options without worrying about lockFile
+case "${1,,}" in
+    "-h"|"--help")
+        echo "-h  --help      Displays this help message"
+        echo ""
+        echo "-u  --update    Self update to the most recent version"
+        exit 0
+    ;;
+    "-u"|"--Update")
+        oldStartLine="0"
+        while read -r i; do
+            if [[ "${i}" == "##        Changelog        ##" ]]; then
+                oldStartLine="1"
+            elif [[ "${oldStartLine}" -eq "1" ]]; then
+                oldStartLine="2"
+            elif [[ "${oldStartLine}" -eq "2" ]]; then
+                oldStartLine="${i}"
+                break
+            fi
+        done < "${0}"
+        if curl -skL "${updateURL}" -o "${0}"; then
+            if chmod +x "${0}"; then
+                printOutput "1" "Update complete"
+                newStartLine="0"
+                while read -r i; do
+                    if [[ "${newStartLine}" -eq "2" ]]; then
+                        if [[ "${i}" == "${oldStartLine}" ]]; then
+                            break
+                        fi
+                        if [[ "${i:2:1}" =~ ^[0-9]$ ]]; then
+                            changelogArr+=(" ${i#\#}")
+                        else
+                            changelogArr+=("  - ${i#\#}")
+                        fi
+                    elif [[ "${newStartLine}" -eq "1" ]]; then
+                        newStartLine="2"
+                    elif [[ "${i}" == "##        Changelog        ##" ]]; then
+                        newStartLine="1"
+                    fi
+                done < <(curl -skL "${updateURL}")
+
+                printOutput "1"  "Changelog:"
+                for i in "${changelogArr[@]}"; do
+                    printOutput "1"  "${i}"
+                done
+                cleanExit
+            else
+                badExit "2" "Update downloaded, but unable to \`chmod +x\`"
+            fi
+        else
+            badExit "3" "Unable to download Update"
+        fi
+    ;;
+esac
+
+#############################
 ##   Initiate .env file    ##
 #############################
-source "${realPath%/*}/${scriptName%.bash}.env"
+if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
+    source "${realPath%/*}/${scriptName%.bash}.env"
+else
+    badExit "4" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+fi
 varFail="0"
 # Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
@@ -215,6 +312,10 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
 fi
 
 # Config specific checks
+if ! [[ "${repairDatabase,,}" =~ ^(yes|no|true|false)$ ]]; then
+    echo "Option to run database repair tool not valid. Assuming no."
+    repairDatabase="No"
+fi
 if [[ -z "${plexAccessToken}" ]]; then
     echo "Please specify a 'plexAccessToken=\"\"'"
     varFail="1"
@@ -271,14 +372,10 @@ else
         *) echo "Please specify a valid 'hostOS=\"\"'"; varFail="1";;
     esac
 fi
-if [[ -z "${hostCodecPath}" ]] || ! [[ -d "${hostCodecPath%/}" ]]; then
-    echo "Please specify a 'hostCodecPath=\"\"'"
-    varFail="1"
-fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "8" "Please fix above errors"
+    badExit "5" "Please fix above errors"
 fi
 
 #############################
@@ -288,10 +385,15 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
-        # Although it's not an error, we should always be allowed to print this message if update checks are allowed, so giving it priority 1
-        printOutput "1" "A newer version is available"
+        printOutput "0" "A newer version is available"
+        # If our ${TERM} is dumb, we're probably running via cron, and should push a message to Telegram, if allowed
+        if [[ "${TERM,,}" == "dumb" ]]; then
+            if [[ "${telegramErrorMessages}" =~ ^(yes|true)$ ]]; then
+                sendTelegramMessage "[${0##*/}] An update is available" "${telegramErrorChannel}"
+            fi
+        fi
     else
-        printOutput "2" "No new updates available"
+        printOutput "3" "No new updates available"
     fi
 fi
 
@@ -300,41 +402,54 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "9" "Do not appear to have permission to run on the docker socket (`docker version` returned non-zero exit code)"
+    badExit "6" "Do not appear to have permission to run on the docker socket (\`docker version\` returned non-zero exit code)"
 fi
 
 # Get the IP address of the Plex container
 if [[ -z "${containerIp}" ]]; then
     printOutput "2" "Attempting to automatically determine container IP address"
     # Find the type of networking the container is using
-    containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${containerName}")"
-    printOutput "3" "Networking type: ${containerNetworking}"
-    if [[ -z "${containerNetworking}" ]]; then
-        printOutput "2" "No network type defined. Checking to see if networking is through another container."
-        # IP address returned blank. Is it being networked through another container?
-        containerIp="$(docker inspect "${containerName}" | jq ".[].HostConfig.NetworkMode")"
-        containerIp="${containerIp#\"}"
-        containerIp="${containerIp%\"}"
-        printOutput "3" "Network mode: ${containerIp%%:*}"
-        if [[ "${containerIp%%:*}" == "container" ]]; then
-            # Networking is being run through another container. So we need that container's IP address.
-            printOutput "2" "Networking routed through another container. Retrieving IP address."
-            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
-        else
-            printOutput "1" "Unable to determine networking type"
-            unset containerIp
+    unset containerNetworking
+    while read i; do
+        if [[ -n "${i}" ]]; then
+            containerNetworking+=("${i}")
         fi
-    elif [[ "${containerNetworking}" == "host" ]]; then
-        # Host networking, so we can probably use localhost
-        containerIp="127.0.0.1"
-    else
-        # Something else. Let's see if we can get it via inspect.
-        containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerName}")"
-    fi
+    done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${containerName}")
+    printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+    for i in "${containerNetworking[@]}"; do
+        if [[ -z "${i}" ]]; then
+            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            # IP address returned blank. Is it being networked through another container?
+            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
+            containerIp="${containerIp#\"}"
+            containerIp="${containerIp%\"}"
+            printOutput "3" "Network mode: ${containerIp%%:*}"
+            if [[ "${containerIp%%:*}" == "container" ]]; then
+                # Networking is being run through another container. So we need that container's IP address.
+                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+            else
+                printOutput "1" "Unable to determine networking type"
+                unset containerIp
+            fi
+        elif [[ "${i}" == "host" ]]; then
+            # Host networking, so we can probably use localhost
+            printOutput "3" "Networking type: ${i}"
+            containerIp="127.0.0.1"
+        else
+            # Something else. Let's see if we can get it via inspect.
+            printOutput "3" "Other networking type: ${i}"
+            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
+        fi
+        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+            printOutput "1" "Unable to determine IP address via networking mode: ${i}"
+        else
+            printOutput "2" "Container IP address: ${containerIp}"
+            break
+        fi
+    done
     if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        badExit "9" "Unable to determine IP address"
-    else
-        printOutput "2" "Container IP address: ${containerIp}"
+        badExit "7" "Unable to determine IP address"
     fi
 fi
 
@@ -343,31 +458,23 @@ plexAdd="${plexScheme}://${containerIp}:${plexPort}"
 printOutput "3" "Server address: ${plexAdd}"
 
 # Make sure our server is reachable, and we can check our version
-myVer="$(curl -skL -m 15 "${plexAdd}/servers?X-Plex-Token=${plexAccessToken}")"
-curlExitCode="${?}"
-if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "10" "Unable to check local version, curl returned non-zero exit code: ${curlExitCode}"
-fi
-myVer="$(grep -Ev "^<\?xml" <<<"${myVer}" | grep -Eo "version=\"([[:alnum:]]|\.|-)+\"")"
+callCurl "${plexAdd}/servers?X-Plex-Token=${plexAccessToken}"
+myVer="$(grep -Ev "^<\?xml" <<<"${curlOutput}" | grep -Eo "version=\"([[:alnum:]]|\.|-)+\"")"
 myVer="${myVer#*version=\"}"
 myVer="${myVer%%\"*}"
 if [[ "${myVer}" == "null" ]] || [[ -z "${myVer}" ]]; then
-    badExit "11" "Unable to parse local version"
+    badExit "8" "Unable to parse local version"
 else
     printOutput "2" "Detected local version: ${myVer}"
 fi
 
 # Make sure we can check the latest version
-currVer="$(curl -skL -m 15 "https://plex.tv/api/downloads/1.json?channel=${plexVersion}")"
-curlExitCode="${?}"
-if [[ "${curlExitCode}" -ne "0" ]]; then
-    badExit "12" "Unable to check latest version, curl returned non-zero exit code: ${curlExitCode}"
-fi
-currVer="$(jq ".computer.${hostOS}.version" <<<"${currVer}")"
+callCurl "https://plex.tv/api/downloads/1.json?channel=${plexVersion}"
+currVer="$(jq ".computer.${hostOS}.version" <<<"${curlOutput}")"
 currVer="${currVer#\"}"
 currVer="${currVer%\"}"
 if [[ "${currVer}" == "null" ]] || [[ -z "${currVer}" ]]; then
-    badExit "13" "Unable to parse latest version"
+    badExit "9" "Unable to parse latest version"
 else
     printOutput "2" "Detected current version: ${currVer}"
 fi
@@ -412,43 +519,68 @@ if [[ "${nowPlaying}" -ne "0" ]]; then
     cleanExit;
 fi
 
-# Nice, nobody's watching anything. Let's restart the Docker container.
-# Get the Docker container ID
-printOutput "2" "Stopping container"
-if docker stop "${containerName}"; then
-    printOutput "3" "Container stopped successfully"
-else
-    badExit "14" "Unable to stop container"
+# Nice, nobody's watching anything. 
+
+# Are we allowed to run the DB repair tool?
+if [[ "${repairDatabase,,}" =~ ^(yes|true)$ ]]; then
+    printOutput "3" "Pulling newest copy of DB Repair Tool into container"
+    if docker exec "${containerName}" curl -skL "https://raw.githubusercontent.com/ChuckPa/PlexDBRepair/master/DBRepair.sh" -o "/root/db_repair_new.sh" > /dev/null 2>&1; then
+        toolVersion="$(docker exec "${containerName}" grep -m 1 "# Version:" "/root/db_repair_new.sh" 2>/dev/null | awk '{print $3}')"
+        toolDate="$(docker exec "${containerName}" grep -m 1 "# Date:" "/root/db_repair_new.sh" 2>/dev/null | awk '{print $3}')"
+        if [[ -n "${toolDate}" && -n "${toolVersion}" ]]; then
+            printOutput "2" "Newest copy of repair tool pulled"
+            printOutput "3" "Tool Version: ${toolVersion} | Tool Date: ${toolDate}"
+            if docker exec "${containerName}" chmod +x "/root/db_repair_new.sh" > /dev/null 2>&1; then
+                printOutput "3" "Tool set as executable successfully"
+                if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
+                    dockerHost="$(</etc/hostname)"
+                    printOutput "3" "Got hostname: ${dockerHost}"
+                    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for database maintenance and repair"
+                    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+                    sendTelegramMessage "${eventText}"
+                fi
+                printOutput "2" "Initiating database repair -- This may take some time"
+                printOutput "2" "Begin repair tool output"
+                printOutput "2" "============================"
+                while read -r i; do
+                    printOutput "2" "${i}"
+                done < <(docker exec "${containerName}" /root/db_repair_new.sh stop check auto exit 2>&1)
+                printOutput "2" "============================"
+                printOutput "2" "End of repair tool output"
+            else
+                printOutput "1" "Unable to set tool as executable -- Skipping database repair"
+            fi
+        else
+            printOutput "1" "Unable to validate tool version/date -- Skipping database repair"
+        fi
+    else
+        printOutput "1" "Unable to pull newest copy of repair tool -- Skipping database repair"
+    fi
 fi
 
 # Clean out the Codecs folder, because apparently that sometimes breaks things between upgrades if you don't
 # https://old.reddit.com/r/PleX/comments/lzwkyc/eae_timeout/gq4xcat/
 printOutput "2" "Cleaning out Codecs directory"
-if rm -rf "${hostCodecPath%/}"/*; then
+if docker exec "${containerName}" rm -rf "/config/Library/Application Support/Plex Media Server/Codecs" > /dev/null 2>&1; then
     printOutput "3" "Codecs directory cleared successfully"
 else
-    badExit "15" "Unable to clear Codecs directory"
+    badExit "10" "Unable to clear Codecs directory"
 fi
 
-printOutput "2" "Starting container"
-if docker start "${containerName}"; then
-    printOutput "3" "Container started successfully"
+# Restart the Docker container.
+printOutput "2" "Restarting container"
+if docker restart "${containerName}" > /dev/null 2>&1; then
+    printOutput "3" "Container restarted successfully"
 else
-    badExit "16" "Unable to start container"
+    badExit "11" "Unable restart the container"
 fi
 
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ne "0" ]]; then
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
     dockerHost="$(</etc/hostname)"
-    if [[ "${outputVerbosity}" -ge "3" ]]; then
-    printOutput "3" "Counted ${#msgArr[@]} messages to send:"
-        for i in "${msgArr[@]}"; do
-            printOutput "3" "- ${i}"
-        done
-    fi
-    eventText="$(printf "<b>Plex Update for ${dockerHost%%.*}</b>\r\n\r\nPlex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>")"
+    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Plex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>"
     printOutput "3" "Got hostname: ${dockerHost}"
-    printOutput "2" "Telegram messaging enabled -- Checking credentials"
-    sendTelegramMessage
+    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+    sendTelegramMessage "${eventText}"
 fi
 
 #############################
