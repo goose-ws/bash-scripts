@@ -170,10 +170,8 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                 printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
             elif [[ -z "${telegramOutput}" ]]; then
                 printOutput "1" "Curl to Telegram to check channel returned an empty string"
-            else
+            elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
                 printOutput "3" "Curl exit code and null output checks passed"
-            fi
-            if [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
                 printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
                 telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
                 curlExitCode="${?}"
@@ -187,7 +185,9 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
                         printOutput "1" "Failed to send Telegram message:"
                         printOutput "1" ""
-                        printOutput "1" "$(jq . <<<"${telegramOutput}")"
+                        while read -r i; do
+                            printOutput "1" "${i}"
+                        done < <(jq . <<<"${telegramOutput}")
                         printOutput "1" ""
                     else
                         printOutput "2" "Telegram message sent successfully"
@@ -210,7 +210,7 @@ curlOutput="$(curl -skL -H "Authorization: Bearer ${apiKey}" "${1}" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
     printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
-    while read i; do
+    while read -r i; do
         printOutput "1" "Output: ${i}"
     done <<<"${curlOutput}"
     badExit "1" "Bad curl output"
