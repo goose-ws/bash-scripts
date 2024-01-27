@@ -24,16 +24,15 @@ Scripts here include:
 
 | `linode-dynamic-dns.bash` |
 | :---: |
-| A script meant to update a dynamic IP address via Linode's DNS manager. Rather than a packaged `.env.example` file, this one generates the `.env` file when run with the `-c` option. |
+| A script meant to update a dynamic IP address via Linode's DNS manager. |
 | Link to Script: [linode-dynamic-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.bash) |
+| Link to `.env` File: [linode-dynamic-dns.env](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.env.example) |
 
 ---
 
 | `sonarr-group-notifications.bash` |
 | :---: |
-| A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications. |
-| Link to Script: [sonarr-group-notifications.bash](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-group-notifications.bash) |
-| Link to `.env` File: [sonarr-group-notifications.env](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-group-notifications.env.example) |
+| A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications. **This script is currently undergoing a total rewrite, and will be available again...soon™** |
 
 ---
 
@@ -55,13 +54,13 @@ Scripts here include:
 
 ### Todo
 
-- [ ] Updated Telegram sending function to support super groups, silent notifications
-- [ ] Update Docker container IP address detection to deal with containers with multiple networking types
 - [ ] Re-write [sonarr-group-notifications.bash](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-group-notifications.bash) to new standard, and to fix its behavior
-- [ ] Update [linode-dynamic-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.bash) to new standard
 - [ ] Update [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) to destroy/re-create the container, rather than just restart it (helps clean up old/unnecessary files)
-- [ ] Update [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) to offer to use ChuckPA's database repair/optimization tool between updates
 
 ### Done ✓
 
 - [x] Update [captive-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/captive-dns.bash) to new standard
+- [x] Updated Telegram sending function to support super groups, silent notifications
+- [x] Update Docker container IP address detection to deal with containers with multiple networking types
+- [x] Update [linode-dynamic-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.bash) to new standard
+- [x] Update [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) to offer to use ChuckPA's database repair/optimization tool between updates
