@@ -2,3 +2,7 @@
 *.env
 # Ignore .bak files
 *.bak
+# Ignore .log file
+*.log
+skeleton.bash
+number_bad_exists.bash
