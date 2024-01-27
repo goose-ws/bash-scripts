@@ -24,6 +24,12 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-01-27
+# Improved some sanity checks and logic for escape scenarioes
+# Added support for when a container has multiple networks attached (Multiple IP addresses)
+# Updated the logic for sending Telegram messages to make sure the bot can authenticate to each channel
+# Added support for super groups, silent messages (See updated .env file)
+# Added support for sending error messages via telegram (See updated .env file)
 # 2023-12-30
 # Defined some paths, as iptables isn't in the default ${PATH} for sh
 # Fixed some logic regarding persisting across restarts
@@ -49,60 +55,73 @@
 #############################
 ##      Sanity checks      ##
 #############################
-if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
-    /bin/echo "This script requires Bash version 4 or greater"
+if ! [ -e "/bin/bash" ]; then
+    echo "This script requires Bash"
     exit 255
 fi
-depArr=("/usr/bin/awk" "/bin/cp" "/usr/bin/curl" "/bin/date" "/bin/echo" "/bin/grep" "/usr/bin/host" "/usr/bin/md5sum" "/usr/bin/realpath" "/usr/bin/basename" "/bin/rm" "/usr/sbin/iptables" "/usr/bin/sort")
+if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
+    echo "This script requires Bash version 4 or greater"
+    exit 255
+fi
+# Define the ${PATH} for cron
+PATH="/root/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+depArr=("awk" "cp" "curl" "date" "echo" "grep" "host" "md5sum" "realpath" "basename" "rm" "iptables" "sort")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
         if ! [[ -e "${i}" ]]; then
-            /bin/echo "${i}\\tnot found"
+            echo "${i}\\tnot found"
             depFail="1"
         fi
     else
         if ! command -v "${i}" > /dev/null 2>&1; then
-            /bin/echo "${i}\\tnot found"
+            echo "${i}\\tnot found"
             depFail="1"
         fi
     fi
 done
 if [[ "${depFail}" -eq "1" ]]; then
-    /bin/echo "Dependency check failed"
+    echo "Dependency check failed"
     exit 255
 fi
 realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
-/bin/echo "Run at: $(date)" >> "${lockFile%.lock}.run"
+echo "Run at: $(date)" >> "${lockFile%.lock}.run"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash"
+lineBreak="$(printf "\r\n\r\n")"
 
 #############################
 ##         Lockfile        ##
 #############################
 if [[ -e "${lockFile}" ]]; then
-    if kill -s 0 "$(<"${lockfile}")"; then
-        /bin/echo "${0##*/}   ::   $(/bin/date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
+    if kill -s 0 "$(<"${lockFile}")" > /dev/null 2>&1; then
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Lockfile present, exiting"
         exit 0
     else
-        /bin/echo "${0##*/}   ::   $(/bin/date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockfile}")"
+        echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Removing stale lockfile for PID $(<"${lockFile}")"
     fi
 fi
-/bin/echo "${$}" > "${lockFile}"
+echo "${$}" > "${lockFile}"
 
 #############################
 ##    Standard Functions   ##
 #############################
 function printOutput {
+case "${1}" in
+    0) logLevel="[reqrd]";; # Required
+    1) logLevel="[error]";; # Errors
+    2) logLevel="[info] ";; # Informational
+    3) logLevel="[verb] ";; # Verbose
+esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
-    /bin/echo "${0##*/}   ::   $(/bin/date "+%Y-%m-%d %H:%M:%S")   ::   [${1}] ${2}"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
 fi
 }
 
 function removeLock {
-if /bin/rm -f "${lockFile}"; then
+if rm -f "${lockFile}"; then
     printOutput "3" "Lockfile removed"
 else
     printOutput "1" "Unable to remove lockfile"
@@ -110,11 +129,14 @@ fi
 }
 
 function badExit {
-    removeLock
+removeLock
 if [[ -z "${2}" ]]; then
     printOutput "0" "Received signal: ${1}"
     exit "255"
 else
+    if [[ "${telegramErrorMessages,,}" =~ ^(yes|true)$ ]]; then
+        sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}Error Code ${1}:${lineBreak}${2}" "${telegramErrorChannel}"
+    fi
     printOutput "1" "${2}"
     exit "${1}"
 fi
@@ -129,54 +151,69 @@ exit 0
 }
 
 function sendTelegramMessage {
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
+    # Message to send should be passed as function positional parameter #1
+    # We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
     # Let's check to make sure our messaging credentials are valid
-    telegramOutput="$(/usr/bin/curl -H "Host: api.telegram.org" -skL "https://${telegramAddr}/bot${telegramBotId}/getMe" 2>&1)"
+    skipTelegram="0"
+    telegramOutput="$(curl -skL "https://${telegramAddr}/bot${telegramBotId}/getMe" 2>&1)"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "1" "/usr/bin/curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+        printOutput "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
+        skipTelegram="1"
     elif [[ -z "${telegramOutput}" ]]; then
-        badExit "2" "/usr/bin/curl to Telegram to check Bot ID returned an empty string"
+        printOutput "1" "Curl to Telegram to check Bot ID returned an empty string"
+        skipTelegram="1"
     else
-        printOutput "3" "/usr/bin/curl exit code and null output checks passed"
+        printOutput "3" "Curl exit code and null output checks passed"
     fi
-    if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-        badExit "3" "Telegram bot API check failed"
-    else
-        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
-        telegramOutput="$(/usr/bin/curl -H "Host: api.telegram.org" -skL "https://${telegramAddr}/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
-        curlExitCode="${?}"
-        if [[ "${curlExitCode}" -ne "0" ]]; then
-            badExit "4" "/usr/bin/curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
-        elif [[ -z "${telegramOutput}" ]]; then
-            badExit "5" "/usr/bin/curl to Telegram to check channel returned an empty string"
-        else
-            printOutput "3" "/usr/bin/curl exit code and null output checks passed"
-        fi
+    if [[ "${skipTelegram}" -eq "0" ]]; then
         if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-            badExit "6" "Telegram channel check failed"
+            printOutput "1" "Telegram bot API check failed"
         else
-            printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}") "
+            printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+            for chanId in "${telegramChannelId[@]}"; do
+                if [[ -n "${2}" ]]; then
+                    chanId="${2}"
+                fi
+                telegramOutput="$(curl -skL "https://${telegramAddr}/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+                curlExitCode="${?}"
+                if [[ "${curlExitCode}" -ne "0" ]]; then
+                    printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
+                elif [[ -z "${telegramOutput}" ]]; then
+                    printOutput "1" "Curl to Telegram to check channel returned an empty string"
+                elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
+                    printOutput "3" "Curl exit code and null output checks passed"
+                    printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
+                    telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+                    curlExitCode="${?}"
+                    if [[ "${curlExitCode}" -ne "0" ]]; then
+                        printOutput "1" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
+                    elif [[ -z "${telegramOutput}" ]]; then
+                        printOutput "1" "Curl to Telegram to send message returned an empty string"
+                    else
+                        printOutput "3" "Curl exit code and null output checks passed"
+                        # Check to make sure Telegram returned a true value for ok
+                        if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
+                            printOutput "1" "Failed to send Telegram message:"
+                            printOutput "1" ""
+                            while read -r i; do
+                                printOutput "1" "${i}"
+                            done < <(jq . <<<"${telegramOutput}")
+                            printOutput "1" ""
+                        else
+                            printOutput "2" "Telegram message sent successfully"
+                        fi
+                    fi
+                else
+                    printOutput "1" "Telegram channel check failed"
+                fi
+                if [[ -n "${2}" ]]; then
+                    break
+                fi
+            done
         fi
     fi
-    for chanId in "${telegramChannelId[@]}"; do
-        telegramOutput="$(/usr/bin/curl -H "Host: api.telegram.org" -skL --data-urlencode "text=${eventText}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
-        curlExitCode="${?}"
-        if [[ "${curlExitCode}" -ne "0" ]]; then
-            badExit "7" "/usr/bin/curl to Telegram returned a non-zero exit code: ${curlExitCode}"
-        else
-            printOutput "3" "/usr/bin/curl returned zero exit code"
-            # Check to make sure Telegram returned a true value for ok
-            if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
-                printOutput "1" "Failed to send Telegram message:"
-                printOutput "1" ""
-                printOutput "1" "$(jq . <<<"${telegramOutput}")"
-                printOutput "1" ""
-            else
-                printOutput "2" "Telegram message sent successfully"
-            fi
-        fi
-    done
 fi
 }
 
@@ -187,34 +224,34 @@ removeRules () {
 printOutput "3" "Initiating rule removal"
 while read -r i; do
     printOutput "2" "Removing iptables NAT rule ${i}"
-    /usr/sbin/iptables -t nat -D PREROUTING "${i}"
-done < <(/usr/sbin/iptables -n -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /usr/bin/awk '{print $1}' | /usr/bin/sort -nr)
+    iptables -t nat -D PREROUTING "${i}"
+done < <(iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
 printOutput "3" "Rule removal complete"
 }
 
 addRules () {
 printOutput "3" "Initiating rule adding"
 if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    badExit "8" "${1} is not a valid IP address"
+    badExit "1" "${1} is not a valid IP address"
 fi
 if ! [[ "${2}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    badExit "9" "${2} is not a valid IP address or CIDR range"
+    badExit "2" "${2} is not a valid IP address or CIDR range"
 fi
 # Should be passed as: addRules "IP address you want redirected to" "IP address or CIDR range allowed"
 for intfc in "${vlanInterfaces[@]}"; do
     printOutput "2" "Forcing interface ${intfc} to ${1}:${dnsPort}"
-    /usr/sbin/iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
+    iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
 done
 printOutput "3" "Rule adding complete"
 }
 
 testDNS () {
 printOutput "3" "Initiating DNS test"
-if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
+if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
     # Wait 5 seconds and try again, in case of timeout
     printOutput "1" "DNS test attempt 1 failed: ${1}"
     sleep 5
-    if ! /usr/bin/host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
+    if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
         printOutput "1" "DNS test attempt 2 failed: ${1}"
         printOutput "3" "DNS testing complete"
         return 1
@@ -238,17 +275,125 @@ trap "badExit SIGQUIT" QUIT
 trap "badExit SIGKILL" KILL
 
 #############################
+##  Positional parameters  ##
+#############################
+# We can run the positional parameter options without worrying about lockFile
+case "${1,,}" in
+    "-h"|"--help")
+        echo "-h  --help      Displays this help message"
+        echo ""
+        echo "-u  --Update    Self Update to the most recent version"
+        echo ""
+        echo "-r  --rules     Displays current captive DNS rules"
+        echo ""
+        echo "-d  --delete    Deletes current captive DNS rules,"
+        echo "                and does not replace them with anything"
+        echo ""
+        echo "-s  --set       Removes any rules which may exist, and"
+        echo "                then sets new rules for captive DNS"
+        echo "                Usage: -s <1> <2>"
+        echo "                Where <1> is the captive DNS IP address"
+        echo "                and <2> is the allowed DNS CIDR/IP"
+        echo ""
+        echo "--install       Installs script to cron, executing it"
+        echo "                once every minute. Also installs it to"
+        echo "                the on_boot.d/ directory, to persist"
+        echo "                across reboots"
+        echo ""
+        echo "--uninstall     Removes the script from cron"
+        cleanExit "silent"
+    ;;
+    "-u"|"--Update")
+        oldStartLine="0"
+        while read -r i; do
+            if [[ "${i}" == "##        Changelog        ##" ]]; then
+                oldStartLine="1"
+            elif [[ "${oldStartLine}" -eq "1" ]]; then
+                oldStartLine="2"
+            elif [[ "${oldStartLine}" -eq "2" ]]; then
+                oldStartLine="${i}"
+                break
+            fi
+        done < "${0}"
+        if curl -skL "${updateURL}" -o "${0}"; then
+            if chmod +x "${0}"; then
+                printOutput "1" "Update complete"
+                newStartLine="0"
+                while read -r i; do
+                    if [[ "${newStartLine}" -eq "2" ]]; then
+                        if [[ "${i}" == "${oldStartLine}" ]]; then
+                            break
+                        fi
+                        if [[ "${i:2:1}" =~ ^[0-9]$ ]]; then
+                            changelogArr+=(" ${i#\#}")
+                        else
+                            changelogArr+=("  - ${i#\#}")
+                        fi
+                    elif [[ "${newStartLine}" -eq "1" ]]; then
+                        newStartLine="2"
+                    elif [[ "${i}" == "##        Changelog        ##" ]]; then
+                        newStartLine="1"
+                    fi
+                done < <(curl -skL "${updateURL}")
+
+                printOutput "1"  "Changelog:"
+                for i in "${changelogArr[@]}"; do
+                    printOutput "1"  "${i}"
+                done
+                cleanExit
+            else
+                badExit "3" "Update downloaded, but unable to \`chmod +x\`"
+            fi
+        else
+            badExit "4" "Unable to download Update"
+        fi
+    ;;
+    "-r"|"--rules")
+        iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
+        cleanExit "silent"
+    ;;
+    "-d"|"--delete")
+        removeRules;
+        cleanExit
+    ;;
+    "-s"|"--set")
+        shift
+        removeRules;
+        addRules "${1}" "${2}";
+        cleanExit
+    ;;
+    "--install")
+        echo "* * * * * root ${realPath%/*}/${scriptName}" > "/etc/cron.d/${scriptName%.bash}"
+        /etc/init.d/cron restart
+        echo "#!/bin/sh" > "/data/on_boot.d/10-captive-dns.sh"
+        echo "echo \"* * * * * root ${realPath%/*}/${scriptName}\" > \"/etc/cron.d/${scriptName%.bash}" >> "/data/on_boot.d/10-captive-dns.sh"
+        echo "/etc/init.d/cron restart" >> "/data/on_boot.d/10-captive-dns.sh"
+        chmod +x "/data/on_boot.d/10-captive-dns.sh"
+        cleanExit "silent"
+    ;;
+    "--uninstall")
+        rm -f "/etc/cron.d/${scriptName%.bash}" "/data/on_boot.d/10-captive-dns.sh"
+        /etc/init.d/cron restart
+        cleanExit "silent"
+    ;;
+esac
+
+#############################
 ##   Initiate .env file    ##
 #############################
-source "${realPath%/*}/${scriptName%.bash}.env"
+if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
+    source "${realPath%/*}/${scriptName%.bash}.env"
+else
+    badExit "5" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+fi
 varFail="0"
 # Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
-    /bin/echo "${0##*/}   ::   $(/bin/date "+%Y-%m-%d %H:%M:%S")   ::   [1] Option to check for updates not valid. Assuming no."
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
 if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
-    /bin/echo "${0##*/}   ::   $(/bin/date "+%Y-%m-%d %H:%M:%S")   ::   [1] Invalid output verbosity defined. Assuming level 1 (Errors only)"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
 
@@ -294,93 +439,25 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "10" "Please fix above errors"
+    badExit "6" "Please fix above errors"
 fi
 
 #############################
-##  Positional parameters  ##
-#############################
-# We can run the positional parameter options without worrying about lockFile
-case "${1,,}" in
-    "-h"|"--help")
-        /bin/echo "-h  --help      Displays this help message"
-        /bin/echo ""
-        /bin/echo "-u  --up/bin/date    Self up/bin/date to the most recent version"
-        /bin/echo ""
-        /bin/echo "-r  --rules     Displays current captive DNS rules"
-        /bin/echo ""
-        /bin/echo "-d  --delete    Deletes current captive DNS rules,"
-        /bin/echo "                and does not replace them with anything"
-        /bin/echo ""
-        /bin/echo "-s  --set       Removes any rules which may exist, and"
-        /bin/echo "                then sets new rules for captive DNS"
-        /bin/echo "                Usage: -s <1> <2>"
-        /bin/echo "                Where <1> is the captive DNS IP address"
-        /bin/echo "                and <2> is the allowed DNS CIDR/IP"
-        /bin/echo ""
-        /bin/echo "--install       Installs script to cron, executing it"
-        /bin/echo "                once every minute. Also installs it to"
-        /bin/echo "                the on_boot.d/ directory, to persist"
-        /bin/echo "                across reboots"
-        /bin/echo ""
-        /bin/echo "--uninstall     Removes the script from cron"
-        cleanExit "silent"
-    ;;
-    "-u"|"--up/bin/date")
-        if /usr/bin/curl -skL "${updateURL}" -o "${0}"; then
-            if chmod +x "${0}"; then
-                /bin/echo "Up/bin/date complete"
-                exit 0
-            else
-                /bin/echo "Up/bin/date downloaded, but unable to \`chmod +x\`"
-                exit 255
-            fi
-        else
-            /bin/echo "Unable to download up/bin/date"
-            exit 255
-        fi
-    ;;
-    "-r"|"--rules")
-        /usr/sbin/iptables -n -t nat -L PREROUTING --line-numbers | /bin/grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
-        cleanExit "silent"
-    ;;
-    "-d"|"--delete")
-        removeRules;
-        cleanExit
-    ;;
-    "-s"|"--set")
-        shift
-        removeRules;
-        addRules "${1}" "${2}";
-        cleanExit
-    ;;
-    "--install")
-        /bin/echo "* * * * * root ${realPath%/*}/${scriptName}" > "/etc/cron.d/${scriptName%.bash}"
-        /etc/init.d/cron restart
-        /bin/echo "#!/bin/sh" > "/data/on_boot.d/10-captive-dns.sh"
-        /bin/echo "/bin/echo \"* * * * * root ${realPath%/*}/${scriptName}\" > \"/etc/cron.d/${scriptName%.bash}" >> "/data/on_boot.d/10-captive-dns.sh"
-        /bin/echo "/etc/init.d/cron restart" >> "/data/on_boot.d/10-captive-dns.sh"
-        chmod +x "/data/on_boot.d/10-captive-dns.sh"
-        cleanExit "silent"
-    ;;
-    "--uninstall")
-        /bin/rm -f "/etc/cron.d/${scriptName%.bash}" "/data/on_boot.d/10-captive-dns.sh"
-        /etc/init.d/cron restart
-        cleanExit "silent"
-    ;;
-esac
-
-#############################
-##       Up/bin/date check      ##
+##       Update check      ##
 #############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
-    newest="$(/usr/bin/curl -skL "${updateURL}" | /usr/bin/md5sum | /usr/bin/awk '{print $1}')"
-    current="$(/usr/bin/md5sum "${0}" | /usr/bin/awk '{print $1}')"
+    newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
+    current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
-        # Although it's not an error, we should always be allowed to print this message if up/bin/date checks are allowed, so giving it priority 1
-        printOutput "1" "A newer version is available"
+        printOutput "0" "A newer version is available"
+        # If our ${TERM} is dumb, we're probably running via cron, and should push a message to Telegram, if allowed
+        if [[ "${TERM,,}" == "dumb" ]]; then
+            if [[ "${telegramErrorMessages}" =~ ^(yes|true)$ ]]; then
+                sendTelegramMessage "[${0##*/}] An update is available" "${telegramErrorChannel}"
+            fi
+        fi
     else
-        printOutput "2" "No new updates available"
+        printOutput "3" "No new updates available"
     fi
 fi
 
@@ -390,33 +467,33 @@ fi
 printOutput "2" "Verifying internet connectivity"
 if ! ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
     # It appears that it is not
-    badExit "11" "Internet appears to be offline"
+    badExit "7" "Internet appears to be offline"
 else
     printOutput "3" "Internet connectivity verified"
 fi
 
 # We read this into an array as a cheap way of counting the number of results. It should only be zero or one.
-readarray -t captiveDNS < <(/usr/sbin/iptables -n -t nat --list PREROUTING | /bin/grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | /bin/grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | /usr/bin/sort -u)
+readarray -t captiveDNS < <(iptables -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
 if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     # No rules are set
     printOutput "3" "No DNS rules detected"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
         addRules "${primaryDNS}" "${allowedDNS}";
-        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to primary [${primaryDNS}]"
-        sendTelegramMessage
+        eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from null [None set] to primary [${primaryDNS}]"
+        sendTelegramMessage "${eventText}"
     else
         # Primary test failed. Test secondary.
         if testDNS "${secondaryDNS}"; then
             # Secondary test succeded
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to secondary [${secondaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from null [None set] to secondary [${secondaryDNS}]"
+            sendTelegramMessage "${eventText}"
         else
             # Secondary test failed
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from null [None set] to tertiary [${tertiaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from null [None set] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage "${eventText}"
         fi
     fi
 elif [[ "${#captiveDNS[@]}" -ge "2" ]]; then
@@ -439,15 +516,15 @@ elif [[ "${captiveDNS[0]}" == "${primaryDNS}" ]]; then
             printOutput "2" "Secondary DNS check succeeded"
             removeRules;
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from primary [${primaryDNS}] to secondary [${secondaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from primary [${primaryDNS}] to secondary [${secondaryDNS}]"
+            sendTelegramMessage "${eventText}"
         else
             # Secondary test failed
             printOutput "1" "Secondary DNS check failed"
             removeRules;
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from primary [${primaryDNS}] to tertiary [${tertiaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from primary [${primaryDNS}] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage "${eventText}"
         fi
     fi
 elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
@@ -459,8 +536,8 @@ elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
         addRules "${primaryDNS}" "${allowedDNS}";
-        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from secondary [${secondaryDNS}] to primary [${primaryDNS}]"
-        sendTelegramMessage
+        eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from secondary [${secondaryDNS}] to primary [${primaryDNS}]"
+        sendTelegramMessage "${eventText}"
     else
         # Primary test failed. Test secondary.
         printOutput "1" "Primary DNS check failed"
@@ -474,8 +551,8 @@ elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
             printOutput "1" "Secondary DNS check failed"
             removeRules;
             addRules "${tertiaryDNS}" "${tertiaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from secondary [${secondaryDNS}] to tertiary [${tertiaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from secondary [${secondaryDNS}] to tertiary [${tertiaryDNS}]"
+            sendTelegramMessage "${eventText}"
         fi
     fi
 elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
@@ -487,8 +564,8 @@ elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
         addRules "${primaryDNS}" "${allowedDNS}";
-        eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from tertiary [${tertiaryDNS}] to primary [${primaryDNS}]"
-        sendTelegramMessage
+        eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from tertiary [${tertiaryDNS}] to primary [${primaryDNS}]"
+        sendTelegramMessage "${eventText}"
     else
         # Primary test failed. Test secondary.
         printOutput "1" "Primary DNS check failed"
@@ -498,8 +575,8 @@ elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
             printOutput "2" "Secondary DNS check succeeded"
             removeRules;
             addRules "${secondaryDNS}" "${secondaryDNS}";
-            eventText="<b>Captive DNS Status Change</b>$(printf "\r\n\r\n\r\n")Captive DNS switched from tertiary [${tertiaryDNS}] to secondary [${secondaryDNS}]"
-            sendTelegramMessage
+            eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from tertiary [${tertiaryDNS}] to secondary [${secondaryDNS}]"
+            sendTelegramMessage "${eventText}"
         else
             # Secondary test failed
             printOutput "1" "Secondary DNS check failed"
