@@ -402,23 +402,25 @@ for containerName in "${containers[@]}"; do
         fi
     done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${containerName}")
     printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+    if [[ -z "${i}" ]]; then
+        printOutput "2" "No network type defined. Checking to see if networking is through another container."
+        # IP address returned blank. Is it being networked through another container?
+        containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
+        containerIp="${containerIp#\"}"
+        containerIp="${containerIp%\"}"
+        printOutput "3" "Network mode: ${containerIp%%:*}"
+        if [[ "${containerIp%%:*}" == "container" ]]; then
+            # Networking is being run through another container. So we need that container's IP address.
+            printOutput "2" "Networking routed through another container. Retrieving IP address."
+            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+        else
+            printOutput "1" "Unable to determine networking type"
+            unset containerIp
+        fi
+        break
+    fi
     for i in "${containerNetworking[@]}"; do
-        if [[ -z "${i}" ]]; then
-            printOutput "2" "No network type defined. Checking to see if networking is through another container."
-            # IP address returned blank. Is it being networked through another container?
-            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
-            containerIp="${containerIp#\"}"
-            containerIp="${containerIp%\"}"
-            printOutput "3" "Network mode: ${containerIp%%:*}"
-            if [[ "${containerIp%%:*}" == "container" ]]; then
-                # Networking is being run through another container. So we need that container's IP address.
-                printOutput "2" "Networking routed through another container. Retrieving IP address."
-                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
-            else
-                printOutput "1" "Unable to determine networking type"
-                unset containerIp
-            fi
-        elif [[ "${i}" == "host" ]]; then
+        if [[ "${i}" == "host" ]]; then
             # Host networking, so we can probably use localhost
             printOutput "3" "Networking type: ${i}"
             containerIp="127.0.0.1"
