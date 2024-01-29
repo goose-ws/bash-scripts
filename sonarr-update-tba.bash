@@ -45,6 +45,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-01-28
+# Moved the function to find a container's IP address to a standalone function, and made it more durable
+# to finding the IP address across various network configurations
 # 2024-01-27
 # Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
@@ -264,6 +267,55 @@ fi
 ##     Unique Functions    ##
 #############################
 
+function getContainerIp {
+# Container name should be passed as positional paramter #1
+# It will return the variable ${containerIp} if successful
+printOutput "2" "Attempting to automatically determine container IP address for container: ${1}"
+# Find the type of networking the container is using
+unset containerNetworking
+while read -r i; do
+    if [[ -n "${i}" ]]; then
+        containerNetworking+=("${i}")
+    fi
+done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${1}")
+if [[ "${#containerNetworking[@]}" -eq "0" ]]; then
+    # Network type returned blank. Is it being networked through another container?
+    printOutput "2" "No network type defined. Checking to see if networking is through another container."
+    containerIp="$(docker inspect "${1}" | jq -M -r ".[].HostConfig.NetworkMode")"
+    printOutput "3" "Host config network mode: ${containerIp}"
+    if [[ "${containerIp%%:*}" == "container" ]]; then
+        # Networking is being run through another container. So we need that container's IP address.
+        printOutput "2" "Networking routed through another container. Retrieving IP address."
+        containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+    else
+        printOutput "1" "Unable to determine networking type"
+        unset containerIp
+    fi
+else
+    printOutput "2" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+    for i in "${containerNetworking[@]}"; do
+        if [[ "${i}" == "host" ]]; then
+            # Host networking, so we can probably use localhost
+            printOutput "3" "Networking type: ${i}"
+            containerIp="127.0.0.1"
+        else
+            # Something else. Let's see if we can get it via inspect.
+            printOutput "3" "Networking type: ${i}"
+            containerIp="$(docker inspect "${1}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
+            if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+                break
+            fi
+        fi
+    done
+fi
+
+if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    badExit "2" "Unable to determine IP address via networking mode: ${i}"
+else
+    printOutput "2" "Container IP address: ${containerIp}"
+fi
+}
+
 #############################
 ##       Signal Traps      ##
 #############################
@@ -321,10 +373,10 @@ case "${1,,}" in
                 done
                 cleanExit
             else
-                badExit "2" "Update downloaded, but unable to \`chmod +x\`"
+                badExit "3" "Update downloaded, but unable to \`chmod +x\`"
             fi
         else
-            badExit "3" "Unable to download Update"
+            badExit "4" "Unable to download Update"
         fi
     ;;
 esac
@@ -335,7 +387,7 @@ esac
 if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
     source "${realPath%/*}/${scriptName%.bash}.env"
 else
-    badExit "4" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+    badExit "5" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
 fi
 varFail="0"
 # Standard checks
@@ -360,7 +412,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "5" "Please fix above errors"
+    badExit "6" "Please fix above errors"
 fi
 
 #############################
@@ -387,58 +439,12 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "6" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
+    badExit "7" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
 for containerName in "${containers[@]}"; do
     printOutput "2" "Processing container: ${containerName}"
-    # Get Sonarr IP address
-    printOutput "2" "Attempting to automatically determine container IP address"
-    # Find the type of networking the container is using
-    unset containerNetworking
-    while read i; do
-        if [[ -n "${i}" ]]; then
-            containerNetworking+=("${i}")
-        fi
-    done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${containerName}")
-    printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
-    if [[ -z "${i}" ]]; then
-        printOutput "2" "No network type defined. Checking to see if networking is through another container."
-        # IP address returned blank. Is it being networked through another container?
-        containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
-        containerIp="${containerIp#\"}"
-        containerIp="${containerIp%\"}"
-        printOutput "3" "Network mode: ${containerIp%%:*}"
-        if [[ "${containerIp%%:*}" == "container" ]]; then
-            # Networking is being run through another container. So we need that container's IP address.
-            printOutput "2" "Networking routed through another container. Retrieving IP address."
-            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
-        else
-            printOutput "1" "Unable to determine networking type"
-            unset containerIp
-        fi
-        break
-    fi
-    for i in "${containerNetworking[@]}"; do
-        if [[ "${i}" == "host" ]]; then
-            # Host networking, so we can probably use localhost
-            printOutput "3" "Networking type: ${i}"
-            containerIp="127.0.0.1"
-        else
-            # Something else. Let's see if we can get it via inspect.
-            printOutput "3" "Other networking type: ${i}"
-            containerIp="$(docker inspect "${containerName}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
-        fi
-        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-            printOutput "1" "Unable to determine IP address via networking mode: ${i}"
-        else
-            printOutput "2" "Container IP address: ${containerIp}"
-            break
-        fi
-    done
-    if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        badExit "7" "Unable to determine IP address"
-    fi
+    getContainerIp "${containerName}"
 
     # Read Sonarr config file
     sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
