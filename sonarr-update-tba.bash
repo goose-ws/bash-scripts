@@ -747,7 +747,7 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
             
             while read -r i; do
                 plexArr+=("${i}")
-            done < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBD\").\"@key\"")
+            done < <(curl -skL "${plexAdd}/search?query=TBD&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBD\").\"@key\"")
             
             if [[ "${#plexArr[@]}" -ge "1" ]]; then
                 printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA/TBD\" title"
