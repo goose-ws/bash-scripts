@@ -87,8 +87,14 @@ echo "${$}" > "${lockFile}"
 ##    Standard Functions   ##
 #############################
 function printOutput {
+case "${1}" in
+    0) logLevel="[reqrd]";; # Required
+    1) logLevel="[error]";; # Errors
+    2) logLevel="[info] ";; # Informational
+    3) logLevel="[verb] ";; # Verbose
+esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
-    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${2}"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
 fi
 }
 
@@ -340,14 +346,14 @@ else
 fi
 
 # Get our addresses
-v4addr="$(curl -skL4 "https://ifconfig.me" 2>&1)"
+v4addr="$(curl -skL4 "https://icanhazip.com" 2>&1)"
 if [[ -n "${v4addr}" ]]; then
     printOutput "3" "Detected assigned IPv4 address: ${v4addr}"
 else
     printOutput "3" "No assigned IPv4 address detected"
 fi
 
-v6addr="$(curl -skL6 "https://ifconfig.me" 2>&1)"
+v6addr="$(curl -skL6 "https://icanhazip.com" 2>&1)"
 if [[ -n "${v6addr}" ]]; then
     printOutput "3" "Detected assigned IPv6 address: ${v6addr}"
 else
@@ -355,7 +361,7 @@ else
 fi
 
 if [[ -z "${v4addr}" && -z "${v6addr}" ]]; then
-    badExit "7" "Unable to determine local IPv4 and IPv6 address (Is https://ifconfig.me down?)"
+    badExit "7" "Unable to determine local IPv4 and IPv6 address (Is https://icanhazip.com down?)"
 fi
 
 # Get the available domains
@@ -415,10 +421,10 @@ for i in "${recordNames[@]}"; do
         if [[ "${#targetAddr[@]}" -gt "1" ]]; then
             badExit "14" "Matched too many target addresses"
         else
-            printOutput "2" "Existing target address: ${targetAddr}"
+            printOutput "2" "Existing target address: ${targetAddr[0]}"
             printOutput "3" "Record ID: ${aRecords[0]}"
         fi
-        if [[ "${targetAddr}" == "${v4addr}" ]]; then
+        if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
             # Our addresses match, we can break this loop
             printOutput "2" "Assigned IPv4 address matches DNS record, skipping"
         else
@@ -492,9 +498,9 @@ for i in "${recordNames[@]}"; do
         if [[ "${#targetAddr[@]}" -gt "1" ]]; then
             badExit "17" "Matched too many target addresses"
         else
-            printOutput "3" "[ID: ${aaaaRecords[0]}] Target address: ${targetAddr}"
+            printOutput "3" "[ID: ${aaaaRecords[0]}] Target address: ${targetAddr[0]}"
         fi
-        if [[ "${targetAddr}" == "${v4addr}" ]]; then
+        if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
             # Our addresses match, we can break this loop
             printOutput "2" "Assigned IPv6 address matches DNS record, skipping"
         else
@@ -566,19 +572,6 @@ done
 # Send Telegram message here
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && -n "${msgArr[@]}" ]]; then
     sendTelegramMessage "${msgArr[@]}"
-fi
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -ne "0" ]]; then
-    dockerHost="$(</etc/hostname)"
-    if [[ "${outputVerbosity}" -ge "3" ]]; then
-        printOutput "3" "Counted ${#msgArr[@]} messages to send:"
-        for i in "${msgArr[@]}"; do
-            printOutput "3" "- ${i}"
-        done
-    fi
-    eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
-    printOutput "3" "Got hostname: ${dockerHost}"
-    printOutput "2" "Telegram messaging enabled -- Passing message to function"
-    sendTelegramMessage "${eventText}"
 fi
 
 #############################
