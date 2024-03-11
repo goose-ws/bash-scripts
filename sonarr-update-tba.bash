@@ -45,6 +45,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-03-11
+# Added support for "TBD" files in addition to "TBA" files
 # 2024-01-28
 # Moved the function to find a container's IP address to a standalone function, and made it more durable
 # to finding the IP address across various network configurations
@@ -321,7 +323,6 @@ fi
 #############################
 trap "badExit SIGINT" INT
 trap "badExit SIGQUIT" QUIT
-trap "badExit SIGKILL" KILL
 
 #############################
 ##  Positional parameters  ##
@@ -542,11 +543,16 @@ for containerName in "${containers[@]}"; do
         printOutput "2" "Checking for TBA items in ${i}"
         matches="0"
         while read -r ii; do
-            printOutput "3" "Found item: ${ii}"
+            printOutput "3" "Found TBA item: ${ii}"
             files+=("${i}:${ii}")
             (( matches++ ))
         done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
-        printOutput "2" "Detected ${matches} TBA items"
+        while read -r ii; do
+            printOutput "3" "Found TBD item: ${ii}"
+            files+=("${i}:${ii}")
+            (( matches++ ))
+        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBD *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+        printOutput "2" "Detected ${matches} TBA/TBD items"
     done
 
     # If the array of files matching the search pattern is not empty, iterate through them
@@ -629,7 +635,7 @@ for containerName in "${containers[@]}"; do
             printOutput "3" "Getting command status queue"
             commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
             while [[ -n "${commandStatus}" ]]; do
-                printOutput "2" "Command status ${debug}: ${commandStatus,,}"
+                printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
                 if [[ "${commandStatus,,}" == "completed" ]]; then
                     break
                 fi
@@ -707,38 +713,8 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
     if ! command -v "xq" > /dev/null 2>&1; then
         printOutput "1" "The 'xq' program is required for Plex TBA functionality"
     else
-        printOutput "2" "Attempting to automatically determine container IP address"
-        # Find the type of networking the container is using
-        containerNetworking="$(docker container inspect --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s" $net}}{{end}}' "${plexContainer}")"
-        printOutput "3" "Networking type: ${containerNetworking}"
-        if [[ -z "${containerNetworking}" ]]; then
-            printOutput "2" "No network type defined -- Checking to see if networking is through another container"
-            # IP address returned blank. Is it being networked through another container?
-            containerIp="$(docker inspect "${plexContainer}" | jq -M -r ".[].HostConfig.NetworkMode")"
-            containerIp="${containerIp#\"}"
-            containerIp="${containerIp%\"}"
-            printOutput "3" "Network mode: ${containerIp%%:*}"
-            if [[ "${containerIp%%:*}" == "container" ]]; then
-                # Networking is being run through another container. So we need that container's IP address.
-                printOutput "2" "Networking routed through another container -- Retrieving IP address"
-                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
-            else
-                printOutput "1" "Unable to determine networking type"
-                unset containerIp
-            fi
-        elif [[ "${containerNetworking}" == "host" ]]; then
-            # Host networking, so we can probably use localhost
-            containerIp="127.0.0.1"
-        else
-            # Something else. Let's see if we can get it via inspect.
-            containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${plexContainer}")"
-        fi
-        if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-            printOutput "1" "Unable to determine plex container IP address"
-            plexSkip="1"
-        else
-            printOutput "2" "Container IP address: ${containerIp}"
-        fi
+        getContainerIp "${plexContainer}"
+        
         # This serves as a sanity check for our Access Token
         # Build our address
         plexAdd="${plexScheme}://${containerIp}:${plexPort}"
@@ -765,9 +741,16 @@ if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${
         # Get a list of TBA items
         if [[ "${plexSkip}" -eq "0" ]]; then
             printOutput "2" "Checking for TBA items in the Plex library"
-            read -r -a plexArr < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] | select(.\"@title\" == \"TBA\").\"@key\" else select(.\"@title\" == \"TBA\").\"@key\" end")
+            while read -r i; do
+                plexArr+=("${i}")
+            done < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBA\").\"@key\"")
+            
+            while read -r i; do
+                plexArr+=("${i}")
+            done < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBD\").\"@key\"")
+            
             if [[ "${#plexArr[@]}" -ge "1" ]]; then
-                printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA\" title"
+                printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA/TBD\" title"
                 for key in "${!plexArr[@]}"; do
                     plexFile="$(curl -skL "${plexAdd}${plexArr[${key}]}?X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video.Media.Part.\"@file\"")"
                     printOutput "2" "Issuing refresh call to Plex for: ${plexFile}"
