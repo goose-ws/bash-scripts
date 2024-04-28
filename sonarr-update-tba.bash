@@ -270,51 +270,55 @@ fi
 #############################
 
 function getContainerIp {
-# Container name should be passed as positional paramter #1
-# It will return the variable ${containerIp} if successful
-printOutput "2" "Attempting to automatically determine container IP address for container: ${1}"
-# Find the type of networking the container is using
-unset containerNetworking
-while read -r i; do
-    if [[ -n "${i}" ]]; then
-        containerNetworking+=("${i}")
-    fi
-done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${1}")
-if [[ "${#containerNetworking[@]}" -eq "0" ]]; then
-    # Network type returned blank. Is it being networked through another container?
-    printOutput "2" "No network type defined. Checking to see if networking is through another container."
-    containerIp="$(docker inspect "${1}" | jq -M -r ".[].HostConfig.NetworkMode")"
-    printOutput "3" "Host config network mode: ${containerIp}"
-    if [[ "${containerIp%%:*}" == "container" ]]; then
-        # Networking is being run through another container. So we need that container's IP address.
-        printOutput "2" "Networking routed through another container. Retrieving IP address."
-        containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    # Container name should be passed as positional paramter #1
+    # It will return the variable ${containerIp} if successful
+    printOutput "3" "Attempting to automatically determine IP address for: ${1}"
+
+    if [[ "${1%%:*}" == "docker" ]]; then
+        unset containerNetworking
+        while read -r i; do
+            if [[ -n "${i}" ]]; then
+                containerNetworking+=("${i}")
+            fi
+        done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${1#*:}")
+        if [[ "${#containerNetworking[@]}" -eq "0" ]]; then
+            printOutput "3" "No network type defined. Checking to see if networking is through another container."
+            containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[].HostConfig.NetworkMode")"
+            printOutput "4" "Host config network mode: ${containerIp}"
+            if [[ "${containerIp%%:*}" == "container" ]]; then
+                printOutput "3" "Networking routed through another container. Retrieving IP address."
+                containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
+            else
+                printOutput "1" "Unable to determine networking type"
+                unset containerIp
+            fi
+        else
+            printOutput "4" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+            for i in "${containerNetworking[@]}"; do
+                if [[ "${i}" == "host" ]]; then
+                    printOutput "4" "Networking type: ${i}"
+                    containerIp="127.0.0.1"
+                else
+                    printOutput "4" "Networking type: ${i}"
+                    containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
+                    if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+                        break
+                    fi
+                fi
+            done
+        fi
     else
-        printOutput "1" "Unable to determine networking type"
-        unset containerIp
+        badExit "12" "Unknown container daemon: ${1%%:*}"
     fi
 else
-    printOutput "2" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
-    for i in "${containerNetworking[@]}"; do
-        if [[ "${i}" == "host" ]]; then
-            # Host networking, so we can probably use localhost
-            printOutput "3" "Networking type: ${i}"
-            containerIp="127.0.0.1"
-        else
-            # Something else. Let's see if we can get it via inspect.
-            printOutput "3" "Networking type: ${i}"
-            containerIp="$(docker inspect "${1}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
-            if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-                break
-            fi
-        fi
-    done
+	containerIp="${1}"
 fi
 
 if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    badExit "2" "Unable to determine IP address via networking mode: ${i}"
+    badExit "13" "Unable to determine IP address via networking mode: ${i}"
 else
-    printOutput "2" "Container IP address: ${containerIp}"
+    printOutput "4" "Container IP address: ${containerIp}"
 fi
 }
 
@@ -402,7 +406,7 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
 fi
 
 # Config specific checks
-if [[ "${#containers[@]}" -eq "0" ]]; then
+if [[ "${#containerIp[@]}" -eq "0" ]]; then
     echo "No container names defined"
     echo "###"
     echo "If using an older version of this script, the .env file has been updated"
@@ -443,17 +447,29 @@ if ! docker version > /dev/null 2>&1; then
     badExit "7" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
-for containerName in "${containers[@]}"; do
-    printOutput "2" "Processing container: ${containerName}"
+for containerName in "${containerIp[@]}"; do
+    printOutput "2" "Processing: ${containerName}"
     getContainerIp "${containerName}"
 
     # Read Sonarr config file
-    sonarrConfig="$(docker exec "${containerName}" cat /config/config.xml | tr -d '\r')"
-    if [[ -z "${sonarrConfig}" ]]; then
-        badExit "8" "Failed to read Sonarr config file"
-    else
-        printOutput "2" "Configuration file retrieved"
-    fi
+	if [[ "${containerName%%:*}" == "docker" ]]; then
+		sonarrConfig="$(docker exec "${containerName#docker:}" cat /config/config.xml | tr -d '\r')"
+	else
+		if [[ "${#containerIp[@]}" -ne "1" ]]; then
+			badExit "1" "Unable to process more than one instance of Sonarr if not using Docker [Counted ${#containerIp[@]} instances: ${containerIp[*]}]"
+		fi
+		if [[ -z "${sonarrConfig}" ]]; then
+			badExit "1" "The \${sonarrConfig} variable MUST be defined for non-Docker instances of Sonarr"
+		elif ! [[ -e "${sonarrConfig}" ]]; then
+			badExit "1" "Sonarr config file does not appear to exist at: ${sonarrConfig}"
+		fi
+		sonarrConfig="$(<"${sonarrConfig}")"
+	fi
+	if [[ -z "${sonarrConfig}" ]]; then
+		badExit "8" "Failed to read Sonarr config file"
+	else
+		printOutput "2" "Configuration file retrieved"
+	fi
 
     # Get Sonarr port from config file
     sonarrPort="$(grep -Eo "<Port>.*</Port>" <<<"${sonarrConfig}")"
@@ -540,20 +556,22 @@ for containerName in "${containers[@]}"; do
     # Can add support for others by modifying the 'grep' line below
     unset files
     for i in "${libraryArr[@]}"; do
-        printOutput "2" "Checking for TBA items in ${i}"
+        printOutput "2" "Checking for TBA/TBD items in ${i}"
         matches="0"
-        while read -r ii; do
-            printOutput "3" "Found TBA item: ${ii}"
-            files+=("${i}:${ii}")
-            (( matches++ ))
-        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBA *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
-        while read -r ii; do
-            printOutput "3" "Found TBD item: ${ii}"
-            files+=("${i}:${ii}")
-            (( matches++ ))
-        done < <(docker exec "${containerName}" find "${i}" -type f -name "* TBD *" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
-        printOutput "2" "Detected ${matches} TBA/TBD items"
-    done
+		if [[ "${containerName%%:*}" == "docker" ]]; then
+			while read -r ii; do
+				printOutput "3" "Found TBA/TBD item: ${ii}"
+				files+=("${i}:${ii}")
+				(( matches++ ))
+			done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regex ".* TB[AD] .*" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+		else
+			while read -r ii; do
+				printOutput "3" "Found TBA/TBD item: ${ii}"
+				files+=("${i}:${ii}")
+				(( matches++ ))
+			done < <(find "${i}" -type f -regex ".* TB[AD] .*" | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+		fi
+	done
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
@@ -565,11 +583,13 @@ for containerName in "${containers[@]}"; do
         printOutput "3" "Verifying file has not already been renamed"
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
         fileExists="0"
-        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
+		if [[ "${containerName%%:*}" == "docker" ]]; then
+			readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+		else
+			readarray -t dirContents < <(find "${file%/*}" -type f)
+		fi
         for i in "${dirContents[@]}"; do
-            i="${i#\'}"
-            i="${i%\'}"
-            if [[ "${i}" == "${file##*/}" ]]; then
+            if [[ "${i}" == "${file}" ]]; then
                 printOutput "3" "Filename unchanged"
                 fileExists="1"
             fi
@@ -679,13 +699,15 @@ for containerName in "${containers[@]}"; do
         fi
         # Check to see if rename happened
         printOutput "3" "Verifying file rename status"
-        readarray -t dirContents < <(docker exec "${containerName}" ls "${file%/*}" | tr -d '\r')
         fileExists="0"
+		if [[ "${containerName%%:*}" == "docker" ]]; then
+			readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+		else
+			readarray -t dirContents < <(find "${file%/*}" -type f)
+		fi
         for i in "${dirContents[@]}"; do
-            i="${i#\'}"
-            i="${i%\'}"
-            if [[ "${i}" == "${file##*/}" ]]; then
-                printOutput "3" "Matched '${i}' to '${file##*/}'"
+            if [[ "${i}" == "${file}" ]]; then
+                printOutput "3" "Filename unchanged"
                 fileExists="1"
             fi
         done
@@ -707,13 +729,13 @@ for containerName in "${containers[@]}"; do
 done
 
 # Check Plex for TBA items, and update their metadata too
-if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainer}" && -n "${plexPort}" ]]; then
+if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainerIp}" && -n "${plexPort}" ]]; then
     plexSkip="0"
     printOutput "2" "Plex token detected, attempting to check for TBA items in Plex"
     if ! command -v "xq" > /dev/null 2>&1; then
         printOutput "1" "The 'xq' program is required for Plex TBA functionality"
     else
-        getContainerIp "${plexContainer}"
+        getContainerIp "${plexContainerIp}"
         
         # This serves as a sanity check for our Access Token
         # Build our address
