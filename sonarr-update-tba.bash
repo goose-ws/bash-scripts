@@ -45,6 +45,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-04-27
+# Added support for host-based instances of Sonarr, in addition to Docker-based instances.
+# Notable, only one host-based instance can be supported, while multiple Docker-based instances can.
+# See updated .env file for updated config options
 # 2024-03-11
 # Added support for "TBD" files in addition to "TBA" files
 # 2024-01-28
