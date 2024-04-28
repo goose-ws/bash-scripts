@@ -309,14 +309,14 @@ if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1
             done
         fi
     else
-        badExit "12" "Unknown container daemon: ${1%%:*}"
+        badExit "2" "Unknown container daemon: ${1%%:*}"
     fi
 else
-	containerIp="${1}"
+    containerIp="${1}"
 fi
 
 if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    badExit "13" "Unable to determine IP address via networking mode: ${i}"
+    badExit "3" "Unable to determine IP address via networking mode: ${i}"
 else
     printOutput "4" "Container IP address: ${containerIp}"
 fi
@@ -378,10 +378,10 @@ case "${1,,}" in
                 done
                 cleanExit
             else
-                badExit "3" "Update downloaded, but unable to \`chmod +x\`"
+                badExit "4" "Update downloaded, but unable to \`chmod +x\`"
             fi
         else
-            badExit "4" "Unable to download Update"
+            badExit "5" "Unable to download Update"
         fi
     ;;
 esac
@@ -392,7 +392,7 @@ esac
 if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
     source "${realPath%/*}/${scriptName%.bash}.env"
 else
-    badExit "5" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+    badExit "6" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
 fi
 varFail="0"
 # Standard checks
@@ -417,7 +417,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "6" "Please fix above errors"
+    badExit "7" "Please fix above errors"
 fi
 
 #############################
@@ -444,7 +444,7 @@ fi
 #############################
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
-    badExit "7" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
+    badExit "8" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
 for containerName in "${containerIp[@]}"; do
@@ -452,31 +452,31 @@ for containerName in "${containerIp[@]}"; do
     getContainerIp "${containerName}"
 
     # Read Sonarr config file
-	if [[ "${containerName%%:*}" == "docker" ]]; then
-		sonarrConfig="$(docker exec "${containerName#docker:}" cat /config/config.xml | tr -d '\r')"
-	else
-		if [[ "${#containerIp[@]}" -ne "1" ]]; then
-			badExit "1" "Unable to process more than one instance of Sonarr if not using Docker [Counted ${#containerIp[@]} instances: ${containerIp[*]}]"
-		fi
-		if [[ -z "${sonarrConfig}" ]]; then
-			badExit "1" "The \${sonarrConfig} variable MUST be defined for non-Docker instances of Sonarr"
-		elif ! [[ -e "${sonarrConfig}" ]]; then
-			badExit "1" "Sonarr config file does not appear to exist at: ${sonarrConfig}"
-		fi
-		sonarrConfig="$(<"${sonarrConfig}")"
-	fi
-	if [[ -z "${sonarrConfig}" ]]; then
-		badExit "8" "Failed to read Sonarr config file"
-	else
-		printOutput "2" "Configuration file retrieved"
-	fi
+    if [[ "${containerName%%:*}" == "docker" ]]; then
+        sonarrConfig="$(docker exec "${containerName#docker:}" cat /config/config.xml | tr -d '\r')"
+    else
+        if [[ "${#containerIp[@]}" -ne "1" ]]; then
+            badExit "9" "Unable to process more than one instance of Sonarr if not using Docker [Counted ${#containerIp[@]} instances: ${containerIp[*]}]"
+        fi
+        if [[ -z "${sonarrConfig}" ]]; then
+            badExit "10" "The \${sonarrConfig} variable MUST be defined for non-Docker instances of Sonarr"
+        elif ! [[ -e "${sonarrConfig}" ]]; then
+            badExit "11" "Sonarr config file does not appear to exist at: ${sonarrConfig}"
+        fi
+        sonarrConfig="$(<"${sonarrConfig}")"
+    fi
+    if [[ -z "${sonarrConfig}" ]]; then
+        badExit "12" "Failed to read Sonarr config file"
+    else
+        printOutput "2" "Configuration file retrieved"
+    fi
 
     # Get Sonarr port from config file
     sonarrPort="$(grep -Eo "<Port>.*</Port>" <<<"${sonarrConfig}")"
     sonarrPort="${sonarrPort#<Port>}"
     sonarrPort="${sonarrPort%</Port>}"
     if ! [[ "${sonarrPort}" =~ ^[0-9]+$ ]]; then
-        badExit "9" "Failed to obtain port"
+        badExit "13" "Failed to obtain port"
     else
         printOutput "2" "Port retrieved from config file"
         printOutput "3" "Port: ${sonarrPort}"
@@ -487,7 +487,7 @@ for containerName in "${containerIp[@]}"; do
     sonarrApiKey="${sonarrApiKey#<ApiKey>}"
     sonarrApiKey="${sonarrApiKey%</ApiKey>}"
     if [[ -z "${sonarrApiKey}" ]]; then
-        badExit "10" "Failed to obtain API key"
+        badExit "14" "Failed to obtain API key"
     else
         printOutput "2" "API key retrieved from config file"
         printOutput "3" "API key: ${sonarrPort}"
@@ -510,9 +510,9 @@ for containerName in "${containerIp[@]}"; do
     apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
-        badExit "11" "Curl returned non-zero exit code: ${curlExitCode}"
+        badExit "15" "Curl returned non-zero exit code: ${curlExitCode}"
     elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
-        badExit "12" "Authorization failure: ${apiCheck}"
+        badExit "16" "Authorization failure: ${apiCheck}"
     else
         printOutput "2" "API authorization succeded"
     fi
@@ -529,7 +529,7 @@ for containerName in "${containerIp[@]}"; do
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
-        badExit "13" "Please create an issue for support with other API versions"
+        badExit "17" "Please create an issue for support with other API versions"
     fi
 
     # Retrieve Sonarr libraries via API
@@ -558,20 +558,20 @@ for containerName in "${containerIp[@]}"; do
     for i in "${libraryArr[@]}"; do
         printOutput "2" "Checking for TBA/TBD items in ${i}"
         matches="0"
-		if [[ "${containerName%%:*}" == "docker" ]]; then
-			while read -r ii; do
-				printOutput "3" "Found TBA/TBD item: ${ii}"
-				files+=("${i}:${ii}")
-				(( matches++ ))
-			done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regex ".* TB[AD] .*" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
-		else
-			while read -r ii; do
-				printOutput "3" "Found TBA/TBD item: ${ii}"
-				files+=("${i}:${ii}")
-				(( matches++ ))
-			done < <(find "${i}" -type f -regex ".* TB[AD] .*" | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
-		fi
-	done
+        if [[ "${containerName%%:*}" == "docker" ]]; then
+            while read -r ii; do
+                printOutput "3" "Found TBA/TBD item: ${ii}"
+                files+=("${i}:${ii}")
+                (( matches++ ))
+            done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regex ".* TB[AD] .*" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+        else
+            while read -r ii; do
+                printOutput "3" "Found TBA/TBD item: ${ii}"
+                files+=("${i}:${ii}")
+                (( matches++ ))
+            done < <(find "${i}" -type f -regex ".* TB[AD] .*" | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+        fi
+    done
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
@@ -583,11 +583,11 @@ for containerName in "${containerIp[@]}"; do
         printOutput "3" "Verifying file has not already been renamed"
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
         fileExists="0"
-		if [[ "${containerName%%:*}" == "docker" ]]; then
-			readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
-		else
-			readarray -t dirContents < <(find "${file%/*}" -type f)
-		fi
+        if [[ "${containerName%%:*}" == "docker" ]]; then
+            readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+        else
+            readarray -t dirContents < <(find "${file%/*}" -type f)
+        fi
         for i in "${dirContents[@]}"; do
             if [[ "${i}" == "${file}" ]]; then
                 printOutput "3" "Filename unchanged"
@@ -621,7 +621,7 @@ for containerName in "${containerIp[@]}"; do
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
             else
-                badExit "14" "Unable to determine series"
+                badExit "18" "Unable to determine series"
             fi
             # Get the title of the series
             seriesTitle="$(jq -M -r ".title" <<<"${series}")"
@@ -631,14 +631,14 @@ for containerName in "${containerIp[@]}"; do
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Determined series ID: ${seriesId[0]}"
             else
-                badExit "15" "Unable to determine series ID"
+                badExit "19" "Unable to determine series ID"
             fi
 
             # Ensure we only matched one series
             if [[ "${#seriesId[@]}" -eq "0" ]]; then
-                badExit "16" "Failed to match series ID for file: ${file}"
+                badExit "20" "Failed to match series ID for file: ${file}"
             elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-                badExit "17" "More than one matched series ID for file: ${file}"
+                badExit "21" "More than one matched series ID for file: ${file}"
             fi
             
             # Refresh the series
@@ -700,11 +700,11 @@ for containerName in "${containerIp[@]}"; do
         # Check to see if rename happened
         printOutput "3" "Verifying file rename status"
         fileExists="0"
-		if [[ "${containerName%%:*}" == "docker" ]]; then
-			readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
-		else
-			readarray -t dirContents < <(find "${file%/*}" -type f)
-		fi
+        if [[ "${containerName%%:*}" == "docker" ]]; then
+            readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+        else
+            readarray -t dirContents < <(find "${file%/*}" -type f)
+        fi
         for i in "${dirContents[@]}"; do
             if [[ "${i}" == "${file}" ]]; then
                 printOutput "3" "Filename unchanged"
