@@ -343,7 +343,7 @@ case "${1,,}" in
         echo "-u  --update    Self update to the most recent version"
         exit 0
     ;;
-    "-u"|"--Update")
+    "-u"|"--update")
         oldStartLine="0"
         while read -r i; do
             if [[ "${i}" == "##        Changelog        ##" ]]; then
