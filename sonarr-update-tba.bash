@@ -45,6 +45,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-05-02
+# Fixed a small typo with a sanity check
 # 2024-04-27
 # Added support for host-based instances of Sonarr, in addition to Docker-based instances.
 # Notable, only one host-based instance can be supported, while multiple Docker-based instances can.
@@ -501,7 +503,7 @@ for containerName in "${containerIp[@]}"; do
     sonarrUrlBase="$(grep -Eo "<UrlBase>.*</UrlBase>" <<<"${sonarrConfig}")"
     sonarrUrlBase="${sonarrUrlBase#<UrlBase>}"
     sonarrUrlBase="${sonarrUrlBase%</UrlBase>}"
-    if [[ -z "${sonarrApiKey}" ]]; then
+    if [[ -z "${sonarrUrlBase}" ]]; then
         printOutput "2" "No URL base detected"
     else
         printOutput "2" "URL base detected"
