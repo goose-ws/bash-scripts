@@ -87,7 +87,6 @@ fi
 realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
-echo "Run at: $(date)" >> "${lockFile%.lock}.run"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/captive-dns.bash"
 lineBreak="$(printf "\r\n\r\n")"
@@ -156,7 +155,7 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
     # We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
     # Let's check to make sure our messaging credentials are valid
     skipTelegram="0"
-    telegramOutput="$(curl -skL "https://${telegramAddr}/bot${telegramBotId}/getMe" 2>&1)"
+    telegramOutput="$(curl -skL -H "Host: api.telegram.org" "https://${telegramAddr}/bot${telegramBotId}/getMe" 2>&1)"
     curlExitCode="${?}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
         printOutput "1" "Curl to Telegram to check Bot ID returned a non-zero exit code: ${curlExitCode}"
@@ -176,7 +175,7 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
                 if [[ -n "${2}" ]]; then
                     chanId="${2}"
                 fi
-                telegramOutput="$(curl -skL "https://${telegramAddr}/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+                telegramOutput="$(curl -skL -H "Host: api.telegram.org" "https://${telegramAddr}/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
                 curlExitCode="${?}"
                 if [[ "${curlExitCode}" -ne "0" ]]; then
                     printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
@@ -185,7 +184,7 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
                 elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
                     printOutput "3" "Curl exit code and null output checks passed"
                     printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
-                    telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
+                    telegramOutput="$(curl -skL -H "Host: api.telegram.org" --data-urlencode "text=${1}" "https://${telegramAddr}/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
                     curlExitCode="${?}"
                     if [[ "${curlExitCode}" -ne "0" ]]; then
                         printOutput "1" "Curl to Telegram returned a non-zero exit code: ${curlExitCode}"
