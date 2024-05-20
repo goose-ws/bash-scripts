@@ -45,6 +45,12 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-05-20
+# Expanded the "Ignore" function, so that entire libraries, series, or specific episodes can be ignored
+# on an individual basis. Due to this, I have done something I hate doing, and renamed the 'ignoreArr'
+# array from the previous update to 'ignoreEpisodes', to better reflect what is being ignored. Please
+# accept my sincerest apologies for this variable rename. I plan to rename no other variables in the future.
+# Also updated some verbiage and some error codes
 # 2024-05-16
 # Added an "Ignore" function, so that specific files/episodes can be ignored on an individual basis
 # See updated .env.example for the 'ignoreArr' array item
@@ -546,19 +552,38 @@ for containerName in "${containerIp[@]}"; do
     # Retrieve Sonarr libraries via API
     libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     numLibraries="$(jq -M length <<<"${libraries}")"
+    printOutput "2" "Detected ${numLibraries} libraries"
     unset libraryArr
     for i in $(seq 0 $(( numLibraries - 1 ))); do
-        item="$(jq -M -r ".[${i}].path" <<<"${libraries}")"
-        item="${item#\"}"
-        item="${item%\"}"
-        libraryArr+=("${item}")
-    done
-    printOutput "2" "Detected ${#libraryArr[@]} libraries"
-    if [[ "${outputVerbosity}" -ge "3" ]]; then
-        for i in "${libraryArr[@]}"; do
-            printOutput "3" "- ${i}"
+        libraryPath="$(jq -M -r ".[${i}].path" <<<"${libraries}")"
+        libraryId="$(jq -M -r ".[${i}].id" <<<"${libraries}")"
+        
+        # Check to see if we should ignore the found library
+        for ignoreId in "${ignoreLibrary[@]}"; do
+            if [[ "${#containerIp[@]}" -eq "1" ]]; then
+                if [[ "${ignoreId}" == "${libraryId}" ]]; then
+                    printOutput "2" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
+                    continue 2
+                fi
+            else
+                if ! [[ "${ignoreId}" =~ ^docker:.*:[0-9]+$ ]]; then
+                    printOutput "1" "Invalid format for ignore ID with multiple containers [${ignoreId}]"
+                    continue
+                fi
+                if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
+                    if [[ "${ignoreId##*:}" == "${libraryId}" ]]; then
+                        printOutput "2" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
+                        continue 2
+                    fi
+                fi
+            fi
         done
-    fi
+        
+        libraryArr+=("${libraryPath}")
+        if [[ "${outputVerbosity}" -ge "3" ]]; then
+            printOutput "3" "- ${libraryPath} [Library ID: ${libraryId}]"
+        fi
+    done
 
     # Search each library for files containing "* TBA *" in the title
     # Supported media types per https://www.plexopedia.com/plex-media-server/general/file-formats-supported-plex/#video
@@ -619,56 +644,90 @@ for containerName in "${containerIp[@]}"; do
             #rootFolder="${file#/}"
             #rootFolder="${rootFolder%%/*}"
             rootFolder="${library}"
-            printOutput "3" "Determined root folder: ${rootFolder}"
+            printOutput "3" "Found root folder: ${rootFolder}"
             # Next get the series folder
             seriesFolder="${file#${rootFolder}/}"
             seriesFolder="${seriesFolder%%/*}"
-            printOutput "3" "Determined series folder: ${seriesFolder}"
+            printOutput "3" "Found series folder: ${seriesFolder}"
             # Build the series path
             seriesPath="${rootFolder}/${seriesFolder}"
             printOutput "3" "Built series path: ${seriesPath}"
             # Find the series which matches the path
             series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
             if [[ -n "${series}" ]]; then
-                printOutput "3" "Determined series: $(jq -M -r ".title" <<<"${series}")"
+                printOutput "3" "Found series: $(jq -M -r ".title" <<<"${series}")"
             else
-                badExit "18" "Unable to determine series"
+                badExit "18" "Unable to find series"
             fi
             # Get the title of the series
             seriesTitle="$(jq -M -r ".title" <<<"${series}")"
             
             # Get the series ID for the series
             readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
-            if [[ -n "${series}" ]]; then
-                printOutput "3" "Determined series ID: ${seriesId[0]}"
-            else
-                badExit "19" "Unable to determine series ID"
-            fi
-
             # Ensure we only matched one series
             if [[ "${#seriesId[@]}" -eq "0" ]]; then
-                badExit "20" "Failed to match series ID for file: ${file}"
+                badExit "19" "Failed to match series ID for file: ${file} [${#seriesId[@]}]"
             elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-                badExit "21" "More than one matched series ID for file: ${file}"
+                badExit "20" "More than one matched series ID for file: ${file} [${#seriesId[@]}]"
+            elif [[ -z "${seriesId[0]}" ]]; then
+                badExit "21" "Series ID lookup returned blank string"
+            elif ! [[ "${seriesId[0]}" =~ ^[0-9]+$ ]]; then
+                badExit "22" "Bad series ID lookup [${#seriesId[@]}]"
+            else
+                printOutput "3" "Found series ID: ${seriesId[0]}"
             fi
+            
+            # Check to see if we should ignore the found series
+            for ignoreId in "${ignoreSeries[@]}"; do
+                if [[ "${#containerIp[@]}" -eq "1" ]]; then
+                    if [[ "${ignoreId}" == "${seriesId[0]}" ]]; then
+                        printOutput "2" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
+                        continue 2
+                    fi
+                else
+                    if ! [[ "${ignoreId}" =~ ^docker:.*:[0-9]+$ ]]; then
+                        printOutput "1" "Invalid format for ignore ID with multiple containers [${ignoreId}]"
+                        continue
+                    fi
+                    if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
+                        if [[ "${ignoreId##*:}" == "${seriesId[0]}" ]]; then
+                            printOutput "2" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
+                            continue 2
+                        fi
+                    fi
+                fi
+            done
             
             # Get the ID of the relevant episode file
             epId="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H 'Content-Type: application/json' -H 'Accept: application/json' | jq -M -r ".[] | select(.episodeNumber==${fileEpisodeNum}) .episodeFileId")"
             if [[ -z "${epId}" ]]; then
-                badExit "22" "Unable to obtain episode ID"
+                badExit "23" "Unable to obtain episode ID"
             elif ! [[ "${epId}" =~ ^[0-9]+$ ]]; then
-                badExit "23" "Episode ID does not appear to be valid: ${epId}"
+                badExit "24" "Episode ID does not appear to be valid: ${epId}"
             elif [[ "${epId}" =~ ^[0-9]+$ ]]; then
                 printOutput "3" "Found episode ID: ${epId}"
             else
-                badExit "24" "Impossible condition"
+                badExit "25" "Impossible condition"
             fi
             
             # Check to see if we should ignore the found file
-            for ignoreId in "${ignoreArr[@]}"; do
-                if [[ "${epId}" == "${ignoreId}" ]]; then
-                    printOutput "2" "Found episode ID in ignore array -- Skipping"
-                    continue 2
+            for ignoreId in "${ignoreEpisodes[@]}"; do
+                if [[ "${#containerIp[@]}" -eq "1" ]]; then
+                    if [[ "${ignoreId}" == "${epId}" ]]; then
+                        printOutput "2" "Episode ID [${epId}] set to be ignored in config -- Skipping"
+                        continue 2
+                    fi
+                else
+                    if ! [[ "${ignoreId}" =~ ^docker:.*:[0-9]+$ ]]; then
+                        printOutput "1" "Invalid format for ignore ID with multiple containers [${ignoreId}]"
+                        continue
+                    fi
+                    if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
+                        if [[ "${ignoreId##*:}" == "${epId}" ]]; then
+                            printOutput "2" "Episode ID [${epId}] set to be ignored in config -- Skipping"
+                            continue 2
+                        fi
+                    fi
                 fi
             done
             
