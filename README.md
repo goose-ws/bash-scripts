@@ -2,6 +2,8 @@
 
 This is a collection of bash scripts I've hacked together over time which may be useful enough that I'm sharing them on GitHub
 
+**Please do not use or expect anything from the 'testing' branch to work. Only scripts from the 'main' branch are polished enough to be expected to work reliably. And even then, consider them 'beta v2' stable, not full production stable.**
+
 I have a moderate amount of skill in bash. I am no expert, but I am no novice either. There may be better ways to execute the flow of logic I am trying to achieve in these scripts. If you have a suggestion, I would welcome a pull request. If you have an issue, you are welcome to create an Issue or reach out to me on IRC. I idle in #goose on Libera, and usually respond within a few hours of being highlighted.
 
 Unless otherwise noted, all scripts in this repository are covered by the [MIT liencse](https://github.com/goose-ws/bash-scripts/blob/main/LICENSE)
