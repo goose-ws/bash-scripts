@@ -599,13 +599,13 @@ for containerName in "${containerIp[@]}"; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
-            done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regex ".* TB[AD] .*" | tr -d '\r' | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+            done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|(Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
         else
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
-            done < <(find "${i}" -type f -regex ".* TB[AD] .*" | grep -E ".*\.(asf|avi|mov|mp4|mpegts|ts|mkv|wmv)$" | sort)
+            done < <(find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|(Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
         fi
     done
 
