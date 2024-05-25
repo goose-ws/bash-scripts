@@ -611,9 +611,9 @@ for containerName in "${containerIp[@]}"; do
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
-        library="${file%%:*}"
+        rootFolder="${file%%:*}"
         file="${file#*:}"
-        printOutput "3" "Library: ${library}"
+        printOutput "3" "Library: ${rootFolder}"
         printOutput "3" "File: ${file}"
         printOutput "2" "Processing ${file##*/}"
         printOutput "3" "Verifying file has not already been renamed"
@@ -641,7 +641,6 @@ for containerName in "${containerIp[@]}"; do
             # Get the root folder
             #rootFolder="${file#/}"
             #rootFolder="${rootFolder%%/*}"
-            rootFolder="${library}"
             printOutput "3" "Found root folder: ${rootFolder}"
             # Next get the series folder
             seriesFolder="${file#${rootFolder}/}"
