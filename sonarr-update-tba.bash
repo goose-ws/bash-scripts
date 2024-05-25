@@ -620,16 +620,14 @@ for containerName in "${containerIp[@]}"; do
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
         fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
-            readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+			if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
+				fileExists="1"
+			fi
         else
-            readarray -t dirContents < <(find "${file%/*}" -type f)
+			if stat "${file}" > /dev/null 2>&1; then
+				fileExists="1"
+			fi
         fi
-        for i in "${dirContents[@]}"; do
-            if [[ "${i}" == "${file}" ]]; then
-                printOutput "3" "Filename unchanged"
-                fileExists="1"
-            fi
-        done
         # Define the season and episode numbers
         epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
         epCode="${epCode// - /}"
