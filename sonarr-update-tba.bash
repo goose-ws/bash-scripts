@@ -300,7 +300,7 @@ if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1
         if [[ "${#containerNetworking[@]}" -eq "0" ]]; then
             printOutput "3" "No network type defined. Checking to see if networking is through another container."
             containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[].HostConfig.NetworkMode")"
-            printOutput "4" "Host config network mode: ${containerIp}"
+            printOutput "3" "Host config network mode: ${containerIp}"
             if [[ "${containerIp%%:*}" == "container" ]]; then
                 printOutput "3" "Networking routed through another container. Retrieving IP address."
                 containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
@@ -309,13 +309,13 @@ if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1
                 unset containerIp
             fi
         else
-            printOutput "4" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+            printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
             for i in "${containerNetworking[@]}"; do
                 if [[ "${i}" == "host" ]]; then
-                    printOutput "4" "Networking type: ${i}"
+                    printOutput "3" "Networking type: ${i}"
                     containerIp="127.0.0.1"
                 else
-                    printOutput "4" "Networking type: ${i}"
+                    printOutput "3" "Networking type: ${i}"
                     containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
                     if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
                         break
@@ -333,7 +333,7 @@ fi
 if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
     badExit "3" "Unable to determine IP address via networking mode: ${i}"
 else
-    printOutput "4" "Container IP address: ${containerIp}"
+    printOutput "3" "Container IP address: ${containerIp}"
 fi
 }
 
