@@ -701,7 +701,8 @@ for containerName in "${containerIp[@]}"; do
             fi
 			
 			### Leaving off here for today.
-			### TODO Here: Query Sonarr for the episode title, to see if the clean title is TBA/TBD
+			episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
+            episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
             
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
@@ -810,15 +811,15 @@ for containerName in "${containerIp[@]}"; do
         fi
         if [[ "${fileExists}" -eq "0" ]]; then
             printOutput "3" "File appears to have been renamed -- Requesting new file name from Sonarr"
-            newEpName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
-            newEpName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${newEpName}")"
+            episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
+            episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
             # In case the episode name is an illegal file name, such as The Changeling S01E03.
             # Probably no longer necessary since moving to asking Sonarr for the title, instead of the file system
-            if [[ -z "${newEpName}" ]]; then
-                newEpName="[Unable to retrieve]"
+            if [[ -z "${episodeName}" ]]; then
+                episodeName="[Unable to retrieve]"
             fi
-            msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${newEpName}</i>")
-            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
+            msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
+            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${episodeName}"
             (( renameCount++ ))
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
