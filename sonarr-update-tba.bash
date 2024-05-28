@@ -798,18 +798,16 @@ for containerName in "${containerIp[@]}"; do
         fi
         # Check to see if rename happened
         printOutput "3" "Verifying file rename status"
-        fileExists="0"
+		fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
-            readarray -t dirContents < <(docker exec "${containerName#docker:}" find "${file%/*}" -type f | tr -d '\r')
+			if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
+				fileExists="1"
+			fi
         else
-            readarray -t dirContents < <(find "${file%/*}" -type f)
+			if stat "${file}" > /dev/null 2>&1; then
+				fileExists="1"
+			fi
         fi
-        for i in "${dirContents[@]}"; do
-            if [[ "${i}" == "${file}" ]]; then
-                printOutput "3" "Filename unchanged"
-                fileExists="1"
-            fi
-        done
         if [[ "${fileExists}" -eq "0" ]]; then
             printOutput "3" "Requesting new file name from Sonarr"
             newEpName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
