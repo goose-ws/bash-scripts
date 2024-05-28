@@ -703,6 +703,7 @@ for containerName in "${containerIp[@]}"; do
 			### Leaving off here for today.
 			episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
             episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
+			printOutput "3" "Found episode title: ${episodeName}"
             
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
