@@ -634,7 +634,6 @@ for containerName in "${containerIp[@]}"; do
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
         if [[ "${fileExists}" -eq "1" ]]; then
-            printOutput "2" "Initiating series rename command"
             # Find the series ID by searching for a series with the matching path
             seriesFolder="${file#${rootFolder}/}"
             seriesFolder="${seriesFolder%%/*}"
