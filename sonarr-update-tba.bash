@@ -613,8 +613,7 @@ for containerName in "${containerIp[@]}"; do
     for file in "${files[@]}"; do
         rootFolder="${file%%:*}"
         file="${file#*:}"
-        printOutput "3" "Library: ${rootFolder}"
-        printOutput "3" "File: ${file}"
+        printOutput "3" "Library: ${rootFolder} | File: ${file#${rootFolder}}"
         printOutput "2" "Processing ${file##*/}"
         printOutput "3" "Verifying file has not already been renamed"
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
@@ -637,18 +636,11 @@ for containerName in "${containerIp[@]}"; do
         if [[ "${fileExists}" -eq "1" ]]; then
             printOutput "2" "Initiating series rename command"
             # Find the series ID by searching for a series with the matching path
-            # First we have to extract ${seriesPath} from ${file}
-            # Get the root folder
-            #rootFolder="${file#/}"
-            #rootFolder="${rootFolder%%/*}"
-            printOutput "3" "Found root folder: ${rootFolder}"
-            # Next get the series folder
             seriesFolder="${file#${rootFolder}/}"
             seriesFolder="${seriesFolder%%/*}"
-            printOutput "3" "Found series folder: ${seriesFolder}"
+            printOutput "3" "Root folder: ${rootFolder} | Series folder: ${seriesFolder}"
             # Build the series path
             seriesPath="${rootFolder}/${seriesFolder}"
-            printOutput "3" "Built series path: ${seriesPath}"
             # Find the series which matches the path
             series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
             if [[ -n "${series}" ]]; then
@@ -797,7 +789,7 @@ for containerName in "${containerIp[@]}"; do
             printOutput "3" "File does not exist at same path, appears to have been renamed"
         fi
         # Check to see if rename happened
-        printOutput "3" "Verifying file rename status"
+        printOutput "3" "Checking to see if file was renamed"
 		fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
 			if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
@@ -809,7 +801,7 @@ for containerName in "${containerIp[@]}"; do
 			fi
         fi
         if [[ "${fileExists}" -eq "0" ]]; then
-            printOutput "3" "Requesting new file name from Sonarr"
+            printOutput "3" "File appears to have been renamed -- Requesting new file name from Sonarr"
             newEpName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
             newEpName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${newEpName}")"
             # In case the episode name is an illegal file name, such as The Changeling S01E03.
@@ -821,7 +813,7 @@ for containerName in "${containerIp[@]}"; do
             printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${newEpName}"
             (( renameCount++ ))
         else
-            printOutput "2" "[${containerName}] File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
+            printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
     done
 done
