@@ -763,8 +763,6 @@ for containerName in "${containerIp[@]}"; do
 				printOutput "2" "Issuing rename command for: ${seriesTitle}"
 				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
 				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-				printOutput "3" "Command status [${commandId}]: $(jq -M -r ".status" <<<"${commandOutput}")"
-				printOutput "3" "Command ID: ${commandId}"
 
 				# Give rename a second to process
 				sleep 1
