@@ -32,19 +32,14 @@
 # I use "Only for Bulk Season Releases". Either of these settings will allow Sonarr to import files if their
 # title is TBA due to metadata not yet being updated for the episode.
 
-# Next, this script relies on finding TBA files with the search patthern: "* TBA *"
-# I suggest having the Episode Clean Title in the "Episode Format". This means that at a minimum,
-# you must have: {Episode CleanTitle}
-# in your "Episode Format" fields. I use the Episode Formats:
-# Standard Episode Format: {Series TitleYear} - S{season:00}E{episode:00} - {Episode CleanTitle} [{Preferred Words }{Quality Full}]{[MediaInfo VideoDynamicRange]}[{MediaInfo VideoBitDepth}bit]{[MediaInfo VideoCodec]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{MediaInfo AudioLanguages}{-Release Group}
-# Daily Episode Format: {Series TitleYear} - {Air-Date} - {Episode CleanTitle} [{Preferred Words }{Quality Full}]{[MediaInfo VideoDynamicRange]}[{MediaInfo VideoBitDepth}bit]{[MediaInfo VideoCodec]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{MediaInfo AudioLanguages}{-Release Group}
-# Anime Episode Format: {Series TitleYear} - S{season:00}E{episode:00} - {absolute:000} - {Episode CleanTitle} [{Preferred Words }{Quality Full}]{[MediaInfo VideoDynamicRange]}[{MediaInfo VideoBitDepth}bit]{[MediaInfo VideoCodec]}[{Mediainfo AudioCodec} { Mediainfo AudioChannels}]{MediaInfo AudioLanguages}{-Release Group}
-
-# Thanks to Trash Guides ( https://trash-guides.info/Sonarr/Sonarr-recommended-naming-scheme/ ) for these naming schemes.
-
 #############################
 ##        Changelog        ##
 #############################
+# 2024-05-28
+# Improved the logic for finding TBA/TBD files, so that TRaSH's naming scheme is no longer needed
+# Cleaned up and consolidated a lot of redundant/excessive verbose logging
+# Removed some old unused variables
+# Changed the way we check for files on the file system to be more sane
 # 2024-05-20
 # Expanded the "Ignore" function, so that entire libraries, series, or specific episodes can be ignored
 # on an individual basis. Due to this, I have done something I hate doing, and renamed the 'ignoreArr'
