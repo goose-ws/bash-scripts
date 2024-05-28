@@ -733,24 +733,21 @@ for containerName in "${containerIp[@]}"; do
 				printOutput "2" "Issuing refresh command for: ${seriesTitle}"
 				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
 				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-				printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-				printOutput "3" "Command ID: ${commandId}"
 				refreshedSeries+=("${seriesId[0]}")
 
 				# Give refresh a second to process
 				sleep 1
 				
 				# Check the command status queue to see if the command is done
-				printOutput "3" "Getting command status queue"
 				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-				printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
+				printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
 				if ! [[ "${commandStatus,,}" == "completed" ]]; then
 					while [[ -n "${commandStatus}" ]]; do
 						if [[ "${commandStatus,,}" == "completed" ]]; then
-							printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
+							printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
 							break
 						else
-							printOutput "3" "Command status ${commandId}: ${commandStatus,,}"
+							printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
 						fi
 						sleep 1
 						commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
@@ -766,23 +763,22 @@ for containerName in "${containerIp[@]}"; do
 				printOutput "2" "Issuing rename command for: ${seriesTitle}"
 				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
 				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-				printOutput "3" "Command status ${commandId}: $(jq -M -r ".status" <<<"${commandOutput}")"
+				printOutput "3" "Command status [${commandId}]: $(jq -M -r ".status" <<<"${commandOutput}")"
 				printOutput "3" "Command ID: ${commandId}"
 
 				# Give rename a second to process
 				sleep 1
 				
 				# Check the command status queue to see if the command is done
-				printOutput "3" "Getting command status queue"
 				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-				printOutput "2" "Command status: ${commandStatus,,}"
+				printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
 				if ! [[ "${commandStatus,,}" == "completed" ]]; then
 					while [[ -n "${commandStatus}" ]]; do
 						if [[ "${commandStatus,,}" == "completed" ]]; then
-							printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
+							printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
 							break
 						else
-							printOutput "3" "Command status ${commandId}: ${commandStatus,,}"
+							printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
 						fi
 						sleep 1
 						commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
