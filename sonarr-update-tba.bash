@@ -729,58 +729,70 @@ for containerName in "${containerIp[@]}"; do
             done
             
             # Refresh the series
-            printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-            commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
-            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-            printOutput "3" "Command ID: ${commandId}"
+			skipRefresh="0"
+			for checkId in "${refreshedSeries[@]}"; do
+				if [[ "${checkId}" == "${seriesId[0]}" ]]; then
+					printOutput "3" "Series ID [${seriesId[0]}] has already been refreshed"
+					skipRefresh="1"
+					break
+				fi
+			done
+			
+			if [[ "${skipRefresh}" -eq "0" ]]; then
+				printOutput "2" "Issuing refresh command for: ${seriesTitle}"
+				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
+				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+				printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+				printOutput "3" "Command ID: ${commandId}"
+				refreshedSeries+=("${seriesId[0]}")
 
-            # Give refresh a second to process
-            sleep 1
-            
-            # Check the command status queue to see if the command is done
-            printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            while [[ -n "${commandStatus}" ]]; do
-                printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
-                if [[ "${commandStatus,,}" == "completed" ]]; then
-                    break
-                fi
-                sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            done
-            if [[ -z "${commandStatus}" ]]; then
-                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                sleep 15
-            fi
+				# Give refresh a second to process
+				sleep 1
+				
+				# Check the command status queue to see if the command is done
+				printOutput "3" "Getting command status queue"
+				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+				while [[ -n "${commandStatus}" ]]; do
+					printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
+					if [[ "${commandStatus,,}" == "completed" ]]; then
+						break
+					fi
+					sleep 1
+					commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+				done
+				if [[ -z "${commandStatus}" ]]; then
+					printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+					printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+					sleep 15
+				fi
 
-            # Rename the series
-            printOutput "2" "Issuing rename command for: ${seriesTitle}"
-            commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
-            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-            printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
-            printOutput "3" "Command ID: ${commandId}"
+				# Rename the series
+				printOutput "2" "Issuing rename command for: ${seriesTitle}"
+				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
+				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+				printOutput "3" "Command status: $(jq -M -r ".status" <<<"${commandOutput}")"
+				printOutput "3" "Command ID: ${commandId}"
 
-            # Give rename a second to process
-            sleep 1
-            
-            # Check the command status queue to see if the command is done
-            printOutput "3" "Getting command status queue"
-            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            while [[ -n "${commandStatus}" ]]; do
-                printOutput "2" "Command status: ${commandStatus,,}"
-                if [[ "${commandStatus,,}" == "completed" ]]; then
-                    break
-                fi
-                sleep 1
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            done
-            if [[ -z "${commandStatus}" ]]; then
-                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                sleep 15
-            fi
+				# Give rename a second to process
+				sleep 1
+				
+				# Check the command status queue to see if the command is done
+				printOutput "3" "Getting command status queue"
+				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+				while [[ -n "${commandStatus}" ]]; do
+					printOutput "2" "Command status: ${commandStatus,,}"
+					if [[ "${commandStatus,,}" == "completed" ]]; then
+						break
+					fi
+					sleep 1
+					commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+				done
+				if [[ -z "${commandStatus}" ]]; then
+					printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+					printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+					sleep 15
+				fi
+			fi
         else
             printOutput "3" "File does not exist at same path, appears to have been renamed"
         fi
