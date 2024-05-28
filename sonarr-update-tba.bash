@@ -699,6 +699,9 @@ for containerName in "${containerIp[@]}"; do
             else
                 badExit "25" "Impossible condition"
             fi
+			
+			### Leaving off here for today.
+			### TODO Here: Query Sonarr for the episode title, to see if the clean title is TBA/TBD
             
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
