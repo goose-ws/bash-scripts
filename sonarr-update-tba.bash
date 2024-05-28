@@ -746,9 +746,11 @@ for containerName in "${containerIp[@]}"; do
 				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
 				printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
 				while [[ -n "${commandStatus}" ]]; do
-					printOutput "3" "Command status ${commandId}: ${commandStatus,,}"
 					if [[ "${commandStatus,,}" == "completed" ]]; then
+						printOutput "2" "Command status ${commandId}: ${commandStatus,,}"
 						break
+					else
+						printOutput "3" "Command status ${commandId}: ${commandStatus,,}"
 					fi
 					sleep 1
 					commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
@@ -774,9 +776,11 @@ for containerName in "${containerIp[@]}"; do
 				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
 				printOutput "2" "Command status: ${commandStatus,,}"
 				while [[ -n "${commandStatus}" ]]; do
-					printOutput "3" "Command status: ${commandStatus,,}"
 					if [[ "${commandStatus,,}" == "completed" ]]; then
+						printOutput "2" "Command status: ${commandStatus,,}"
 						break
+					else
+						printOutput "3" "Command status: ${commandStatus,,}"
 					fi
 					sleep 1
 					commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
