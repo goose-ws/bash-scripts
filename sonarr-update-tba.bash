@@ -465,7 +465,7 @@ fi
 renameCount="0"
 
 for containerName in "${containerIp[@]}"; do
-    printOutput "2" "Processing: ${containerName}"
+    printOutput "2" "Processing instance: ${containerName}"
     getContainerIp "${containerName}"
 
     # Read Sonarr config file
@@ -608,6 +608,8 @@ for containerName in "${containerIp[@]}"; do
             done < <(find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
         fi
     done
+	
+	printOutput "2" "Located ${#files[@]} files to process"
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
