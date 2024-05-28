@@ -507,7 +507,7 @@ for containerName in "${containerIp[@]}"; do
         badExit "14" "Failed to obtain API key"
     else
         printOutput "2" "API key retrieved from config file"
-        printOutput "3" "API key: ${sonarrPort}"
+        printOutput "3" "API key: ${sonarrApiKey}"
     fi
 
     # Get Sonarr URL base from config file
