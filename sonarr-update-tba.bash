@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-05-31
+# Fixed a parameter expansion that caused titles to be incorrectly considered false positives
 # 2024-05-28
 # Improved the logic for finding TBA/TBD files, so that TRaSH's naming scheme is no longer needed
 # Cleaned up and consolidated a lot of redundant/excessive verbose logging
