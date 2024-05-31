@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-05-31
+# Fixed a parameter expansion that caused titles to be incorrectly considered false positives
 # 2024-05-28
 # Improved the logic for finding TBA/TBD files, so that TRaSH's naming scheme is no longer needed
 # Cleaned up and consolidated a lot of redundant/excessive verbose logging
@@ -603,8 +605,8 @@ for containerName in "${containerIp[@]}"; do
             done < <(find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
         fi
     done
-	
-	printOutput "2" "Located ${#files[@]} files to process"
+    
+    printOutput "2" "Located ${#files[@]} files to process"
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
@@ -616,17 +618,16 @@ for containerName in "${containerIp[@]}"; do
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
         fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
-			if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
-				fileExists="1"
-			fi
+            if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
+                fileExists="1"
+            fi
         else
-			if stat "${file}" > /dev/null 2>&1; then
-				fileExists="1"
-			fi
+            if stat "${file}" > /dev/null 2>&1; then
+                fileExists="1"
+            fi
         fi
         # Define the season and episode numbers
-        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-        epCode="${epCode// - /}"
+        epCode="$(grep -Eo "S[[:digit:]]+E[[:digit:]]+" <<<"${file}")"
         fileSeasonNum="${epCode%E*}"
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
@@ -694,14 +695,14 @@ for containerName in "${containerIp[@]}"; do
             else
                 badExit "25" "Impossible condition"
             fi
-			
-			### Leaving off here for today.
-			episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
+            
+            ### Leaving off here for today.
+            episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
             episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
-			if ! [[ "${episodeName,,}" =~ ^TB[AD]$ ]]; then
-				printOutput "2" "Clean episode title [${episodeName}] does not match TBA/TBD -- Skipping"
-				continue
-			fi
+            if ! [[ "${episodeName}" =~ ^TB[AD]$ ]]; then
+                printOutput "2" "Clean episode title [${episodeName}] does not match TBA/TBD -- Skipping"
+                continue
+            fi
             
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
@@ -725,88 +726,88 @@ for containerName in "${containerIp[@]}"; do
             done
             
             # Refresh the series
-			skipRefresh="0"
-			for checkId in "${refreshedSeries[@]}"; do
-				if [[ "${checkId}" == "${seriesId[0]}" ]]; then
-					printOutput "3" "Series ID [${seriesId[0]}] has already been refreshed"
-					skipRefresh="1"
-					break
-				fi
-			done
-			
-			if [[ "${skipRefresh}" -eq "0" ]]; then
-				printOutput "2" "Issuing refresh command for: ${seriesTitle}"
-				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
-				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
-				refreshedSeries+=("${seriesId[0]}")
+            skipRefresh="0"
+            for checkId in "${refreshedSeries[@]}"; do
+                if [[ "${checkId}" == "${seriesId[0]}" ]]; then
+                    printOutput "3" "Series ID [${seriesId[0]}] has already been refreshed"
+                    skipRefresh="1"
+                    break
+                fi
+            done
+            
+            if [[ "${skipRefresh}" -eq "0" ]]; then
+                printOutput "2" "Issuing refresh command for: ${seriesTitle}"
+                commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
+                commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+                refreshedSeries+=("${seriesId[0]}")
 
-				# Give refresh a second to process
-				sleep 1
-				
-				# Check the command status queue to see if the command is done
-				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-				printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-				if ! [[ "${commandStatus,,}" == "completed" ]]; then
-					while [[ -n "${commandStatus}" ]]; do
-						if [[ "${commandStatus,,}" == "completed" ]]; then
-							printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-							break
-						else
-							printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
-						fi
-						sleep 1
-						commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-					done
-				fi
-				if [[ -z "${commandStatus}" ]]; then
-					printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-					printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-					sleep 15
-				fi
+                # Give refresh a second to process
+                sleep 1
+                
+                # Check the command status queue to see if the command is done
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                if ! [[ "${commandStatus,,}" == "completed" ]]; then
+                    while [[ -n "${commandStatus}" ]]; do
+                        if [[ "${commandStatus,,}" == "completed" ]]; then
+                            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                            break
+                        else
+                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                        fi
+                        sleep 1
+                        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                    done
+                fi
+                if [[ -z "${commandStatus}" ]]; then
+                    printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                    printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+                    sleep 15
+                fi
 
-				# Rename the series
-				printOutput "2" "Issuing rename command for: ${seriesTitle}"
-				commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
-				commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+                # Rename the series
+                printOutput "2" "Issuing rename command for: ${seriesTitle}"
+                commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
+                commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
-				# Give rename a second to process
-				sleep 1
-				
-				# Check the command status queue to see if the command is done
-				commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-				printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-				if ! [[ "${commandStatus,,}" == "completed" ]]; then
-					while [[ -n "${commandStatus}" ]]; do
-						if [[ "${commandStatus,,}" == "completed" ]]; then
-							printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-							break
-						else
-							printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
-						fi
-						sleep 1
-						commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-					done
-				fi
-				if [[ -z "${commandStatus}" ]]; then
-					printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-					printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-					sleep 15
-				fi
-			fi
+                # Give rename a second to process
+                sleep 1
+                
+                # Check the command status queue to see if the command is done
+                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                if ! [[ "${commandStatus,,}" == "completed" ]]; then
+                    while [[ -n "${commandStatus}" ]]; do
+                        if [[ "${commandStatus,,}" == "completed" ]]; then
+                            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                            break
+                        else
+                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                        fi
+                        sleep 1
+                        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                    done
+                fi
+                if [[ -z "${commandStatus}" ]]; then
+                    printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                    printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+                    sleep 15
+                fi
+            fi
         else
             printOutput "3" "File does not exist at same path, appears to have been renamed"
         fi
         # Check to see if rename happened
         printOutput "3" "Checking to see if file was renamed"
-		fileExists="0"
+        fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
-			if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
-				fileExists="1"
-			fi
+            if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
+                fileExists="1"
+            fi
         else
-			if stat "${file}" > /dev/null 2>&1; then
-				fileExists="1"
-			fi
+            if stat "${file}" > /dev/null 2>&1; then
+                fileExists="1"
+            fi
         fi
         if [[ "${fileExists}" -eq "0" ]]; then
             printOutput "3" "File appears to have been renamed -- Requesting new file name from Sonarr"
