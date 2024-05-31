@@ -625,8 +625,7 @@ for containerName in "${containerIp[@]}"; do
             fi
         fi
         # Define the season and episode numbers
-        epCode="$(grep -Eo " - S[[:digit:]]+E[[:digit:]]+ - " <<<"${file}")"
-        epCode="${epCode// - /}"
+        epCode="$(grep -Eo "S[[:digit:]]+E[[:digit:]]+" <<<"${file}")"
         fileSeasonNum="${epCode%E*}"
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
