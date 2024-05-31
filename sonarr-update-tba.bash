@@ -697,7 +697,7 @@ for containerName in "${containerIp[@]}"; do
             ### Leaving off here for today.
             episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
             episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
-            if ! [[ "${episodeName,,}" =~ ^TB[AD]$ ]]; then
+            if ! [[ "${episodeName}" =~ ^TB[AD]$ ]]; then
                 printOutput "2" "Clean episode title [${episodeName}] does not match TBA/TBD -- Skipping"
                 continue
             fi
