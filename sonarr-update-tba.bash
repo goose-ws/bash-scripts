@@ -540,7 +540,6 @@ for containerName in "${containerIp[@]}"; do
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
         apiEpisode="/api/v3/episode"
-        apiRename="/api/v3/rename"
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
