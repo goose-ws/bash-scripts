@@ -35,6 +35,12 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-06-03
+# Reverted some logic from the 2024-05-28 update, as it turns out we cannot reliably count on the clean title
+# returned by the API call to determine if the title recorded in the filename is TBA/TBD, because the API will
+# only return what the clean title recorded in the database is. As a result, false positives will have to be
+# screened/ignored via the 'ignoreEpisodes' array, rather than screening/ignoring via API checks.
+# Big thanks to @vsilvar for finding this bug, as I don't know that I would have on my own.
 # 2024-05-31
 # Fixed a parameter expansion that caused titles to be incorrectly considered false positives
 # 2024-05-28
