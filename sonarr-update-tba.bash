@@ -765,7 +765,7 @@ for containerName in "${containerIp[@]}"; do
             fi
 
             # Rename the specific episode
-            printOutput "2" "Issuing rename command for: ${seriesTitle} [Season ${fileSeasonNum}]"
+            printOutput "2" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
             commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\":\"RenameFiles\", \"seriesId\":${seriesId[0]}, \"files\":[${epId}]}" 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
