@@ -756,36 +756,36 @@ for containerName in "${containerIp[@]}"; do
                     printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                     sleep 15
                 fi
+			fi
 
-                # Rename the series
-                printOutput "2" "Issuing rename command for: ${seriesTitle}"
-                commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
-                commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+			# Rename the series
+			printOutput "2" "Issuing rename command for: ${seriesTitle}"
+			commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
+			commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
-                # Give rename a second to process
-                sleep 1
-                
-                # Check the command status queue to see if the command is done
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-                if ! [[ "${commandStatus,,}" == "completed" ]]; then
-                    while [[ -n "${commandStatus}" ]]; do
-                        if [[ "${commandStatus,,}" == "completed" ]]; then
-                            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-                            break
-                        else
-                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
-                        fi
-                        sleep 1
-                        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                    done
-                fi
-                if [[ -z "${commandStatus}" ]]; then
-                    printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                    printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                    sleep 15
-                fi
-            fi
+			# Give rename a second to process
+			sleep 1
+			
+			# Check the command status queue to see if the command is done
+			commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+			printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+			if ! [[ "${commandStatus,,}" == "completed" ]]; then
+				while [[ -n "${commandStatus}" ]]; do
+					if [[ "${commandStatus,,}" == "completed" ]]; then
+						printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+						break
+					else
+						printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+					fi
+					sleep 1
+					commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+				done
+			fi
+			if [[ -z "${commandStatus}" ]]; then
+				printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+				printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+				sleep 15
+			fi
         else
             printOutput "3" "File does not exist at same path, appears to have been renamed"
         fi
