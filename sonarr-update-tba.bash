@@ -540,6 +540,7 @@ for containerName in "${containerIp[@]}"; do
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
         apiEpisode="/api/v3/episode"
+		apiRename="/api/v3/rename"
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
@@ -759,8 +760,8 @@ for containerName in "${containerIp[@]}"; do
 			fi
 
 			# Rename the series
-			printOutput "2" "Issuing rename command for: ${seriesTitle}"
-			commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
+			printOutput "2" "Issuing rename command for: ${seriesTitle} [Season ${fileSeasonNum}]"
+			commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRename}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"seriesIds\": [${seriesId[0]}]}, \"seasonNumber\": ${fileSeasonNum}" 2>&1)"
 			commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
 			# Give rename a second to process
