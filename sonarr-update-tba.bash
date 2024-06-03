@@ -540,10 +540,16 @@ for containerName in "${containerIp[@]}"; do
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
         apiEpisode="/api/v3/episode"
+        apiRename="/api/v3/rename"
     else
         printOutput "1" "Detected Sonarr version ${sonarrVersion:0:1}"
         printOutput "1" "Currently only API version 3 (Sonarr v3/v4) is supported"
         badExit "17" "Please create an issue for support with other API versions"
+    fi
+    
+    # Leaving this as an undocumented but configurable option for users who may need to alter their find regex
+    if [[ -z "${findRegex}" ]]; then
+        findRegex=".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$"
     fi
 
     # Retrieve Sonarr libraries via API
@@ -596,13 +602,13 @@ for containerName in "${containerIp[@]}"; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
-            done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
+            done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         else
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
-            done < <(find "${i}" -type f -regextype egrep -regex ".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$" | tr -d '\r' | sort)
+            done < <(find "${i}" -type f -regextype egrep -regex "${fileRegex}" | tr -d '\r' | sort)
         fi
     done
     
@@ -696,14 +702,6 @@ for containerName in "${containerIp[@]}"; do
                 badExit "25" "Impossible condition"
             fi
             
-            ### Leaving off here for today.
-            episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
-            episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
-            if ! [[ "${episodeName}" =~ ^TB[AD]$ ]]; then
-                printOutput "2" "Clean episode title [${episodeName}] does not match TBA/TBD -- Skipping"
-                continue
-            fi
-            
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
                 if [[ "${#containerIp[@]}" -eq "1" ]]; then
@@ -764,35 +762,35 @@ for containerName in "${containerIp[@]}"; do
                     printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                     sleep 15
                 fi
+            fi
 
-                # Rename the series
-                printOutput "2" "Issuing rename command for: ${seriesTitle}"
-                commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RenameSeries\", \"seriesIds\": [${seriesId[0]}]}" 2>&1)"
-                commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
+            # Rename the specific episode
+            printOutput "2" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
+            commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\":\"RenameFiles\", \"seriesId\":${seriesId[0]}, \"files\":[${epId}]}" 2>&1)"
+            commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
-                # Give rename a second to process
-                sleep 1
-                
-                # Check the command status queue to see if the command is done
-                commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-                if ! [[ "${commandStatus,,}" == "completed" ]]; then
-                    while [[ -n "${commandStatus}" ]]; do
-                        if [[ "${commandStatus,,}" == "completed" ]]; then
-                            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
-                            break
-                        else
-                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
-                        fi
-                        sleep 1
-                        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                    done
-                fi
-                if [[ -z "${commandStatus}" ]]; then
-                    printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
-                    printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
-                    sleep 15
-                fi
+            # Give rename a second to process
+            sleep 1
+            
+            # Check the command status queue to see if the command is done
+            commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+            if ! [[ "${commandStatus,,}" == "completed" ]]; then
+                while [[ -n "${commandStatus}" ]]; do
+                    if [[ "${commandStatus,,}" == "completed" ]]; then
+                        printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                        break
+                    else
+                        printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                    fi
+                    sleep 1
+                    commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                done
+            fi
+            if [[ -z "${commandStatus}" ]]; then
+                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
+                sleep 15
             fi
         else
             printOutput "3" "File does not exist at same path, appears to have been renamed"
