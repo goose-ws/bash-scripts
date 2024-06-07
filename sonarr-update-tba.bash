@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-06-07
+# Fixed a typo breaking non-docker finds
 # 2024-05-31
 # Fixed a parameter expansion that caused titles to be incorrectly considered false positives
 # 2024-05-28
