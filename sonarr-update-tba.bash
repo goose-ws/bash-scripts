@@ -608,7 +608,7 @@ for containerName in "${containerIp[@]}"; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
-            done < <(find "${i}" -type f -regextype egrep -regex "${fileRegex}" | tr -d '\r' | sort)
+            done < <(find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         fi
     done
     
