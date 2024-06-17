@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-06-16
+# Added a safety check to validate the lookup of the file season/episode number
 # 2024-06-07
 # Fixed a typo breaking non-docker finds
 # 2024-05-31
