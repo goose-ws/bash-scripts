@@ -35,6 +35,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-06-17
+# Removed case sensitivity when detected the season and episode of a file
+# Removed the use of egrep when obtaining the season and episode of a file
 # 2024-06-16
 # Added a safety check to validate the lookup of the file season/episode number
 # 2024-06-07
@@ -636,11 +639,42 @@ for containerName in "${containerIp[@]}"; do
                 fileExists="1"
             fi
         fi
-        # Define the season and episode numbers
-        epCode="$(grep -Eo "S[[:digit:]]+E[[:digit:]]+" <<<"${file}")"
+        # Define the season and episode numbers        
+        storeCode="0"
+        for (( i=0; i<"${#file}"; i++ )); do
+            char="${file:$i:1}"
+            char="${char^}"
+            if [[ "${char}" == "S" ]]; then
+                # Store it, if the next character is a digit, string them together
+                storeCode="1"
+                epCode="${char}"
+            elif [[ "${storeCode}" -eq "1" ]]; then
+                # We're storing the code.
+                # If it's a digit, add it
+                if [[ "${char}" =~ [0-9] ]]; then
+                    epCode="${epCode}${char}"
+                elif [[ "${char}" == "E" ]]; then
+                    epCode="${epCode}${char}"
+                else
+                    # If it's something else, our string should be built
+                    if [[ "${epCode}" =~ ^S[0-9]+E[0-9]+$ ]]; then
+                        # Matches, we're good, break the loop
+                        break
+                    else
+                        # Doesn't match the pattern, scrap it and start over
+                        unset epCode
+                        storeCode="0"
+                    fi
+                fi
+            fi
+        done
+        
+        # Extract what we want
         fileSeasonNum="${epCode%E*}"
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
+        
+        # Check it for sanity
         if [[ -z "${fileSeasonNum}" || -z "${fileEpisodeNum}" ]]; then
             badExit "18" "Unable to parse season/episode number from file"
         fi
@@ -650,6 +684,7 @@ for containerName in "${containerIp[@]}"; do
         if ! [[ "${fileEpisodeNum}" =~ ^[0-9]+ ]]; then
             badExit "20" "File episode lookup returned non-interger [${fileEpisodeNum}]"
         fi
+        
         if [[ "${fileExists}" -eq "1" ]]; then
             # Find the series ID by searching for a series with the matching path
             seriesFolder="${file#${rootFolder}/}"
