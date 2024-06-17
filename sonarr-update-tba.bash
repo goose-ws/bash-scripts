@@ -650,10 +650,8 @@ for containerName in "${containerIp[@]}"; do
                 epCode="${char}"
             elif [[ "${storeCode}" -eq "1" ]]; then
                 # We're storing the code.
-                # If it's a digit, add it
-                if [[ "${char}" =~ [0-9] ]]; then
-                    epCode="${epCode}${char}"
-                elif [[ "${char}" == "E" ]]; then
+                # If it's a digit, or the letter 'E' add it
+                if [[ "${char}" =~ [0-9] || "${char}" == "E" ]]; then
                     epCode="${epCode}${char}"
                 else
                     # If it's something else, our string should be built
