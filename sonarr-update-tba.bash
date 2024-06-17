@@ -642,7 +642,7 @@ for containerName in "${containerIp[@]}"; do
         # Define the season and episode numbers        
         storeCode="0"
         for (( i=0; i<"${#file}"; i++ )); do
-            char="${file:$i:1}"
+            char="${file:${i}:1}"
             char="${char^}"
             if [[ "${char}" == "S" ]]; then
                 # Store it, if the next character is a digit, string them together
