@@ -639,6 +639,15 @@ for containerName in "${containerIp[@]}"; do
         fileSeasonNum="${epCode%E*}"
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
+        if [[ -z "${fileSeasonNum}" || -z "${fileEpisodeNum}" ]]; then
+            badExit "18" "Unable to parse season/episode number from file"
+        fi
+        if ! [[ "${fileSeasonNum}" =~ ^[0-9]+ ]]; then
+            badExit "19" "File season lookup returned non-interger [${fileSeasonNum}]"
+        fi
+        if ! [[ "${fileEpisodeNum}" =~ ^[0-9]+ ]]; then
+            badExit "20" "File episode lookup returned non-interger [${fileEpisodeNum}]"
+        fi
         if [[ "${fileExists}" -eq "1" ]]; then
             # Find the series ID by searching for a series with the matching path
             seriesFolder="${file#${rootFolder}/}"
@@ -651,7 +660,7 @@ for containerName in "${containerIp[@]}"; do
             if [[ -n "${series}" ]]; then
                 printOutput "3" "Found series: $(jq -M -r ".title" <<<"${series}")"
             else
-                badExit "18" "Unable to find series"
+                badExit "21" "Unable to find series"
             fi
             # Get the title of the series
             seriesTitle="$(jq -M -r ".title" <<<"${series}")"
@@ -660,13 +669,13 @@ for containerName in "${containerIp[@]}"; do
             readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
             # Ensure we only matched one series
             if [[ "${#seriesId[@]}" -eq "0" ]]; then
-                badExit "19" "Failed to match series ID for file: ${file} [${#seriesId[@]}]"
+                badExit "22" "Failed to match series ID for file: ${file} [${#seriesId[@]}]"
             elif [[ "${#seriesId[@]}" -ge "2" ]]; then
-                badExit "20" "More than one matched series ID for file: ${file} [${#seriesId[@]}]"
+                badExit "23" "More than one matched series ID for file: ${file} [${#seriesId[@]}]"
             elif [[ -z "${seriesId[0]}" ]]; then
-                badExit "21" "Series ID lookup returned blank string"
+                badExit "24" "Series ID lookup returned blank string"
             elif ! [[ "${seriesId[0]}" =~ ^[0-9]+$ ]]; then
-                badExit "22" "Bad series ID lookup [${#seriesId[@]}]"
+                badExit "25" "Bad series ID lookup [${#seriesId[@]}]"
             else
                 printOutput "3" "Found series ID: ${seriesId[0]}"
             fi
@@ -695,13 +704,13 @@ for containerName in "${containerIp[@]}"; do
             # Get the ID of the relevant episode file
             epId="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H 'Content-Type: application/json' -H 'Accept: application/json' | jq -M -r ".[] | select(.episodeNumber==${fileEpisodeNum}) .episodeFileId")"
             if [[ -z "${epId}" ]]; then
-                badExit "23" "Unable to obtain episode ID"
+                badExit "26" "Unable to obtain episode ID"
             elif ! [[ "${epId}" =~ ^[0-9]+$ ]]; then
-                badExit "24" "Episode ID does not appear to be valid: ${epId}"
+                badExit "27" "Episode ID does not appear to be valid: ${epId}"
             elif [[ "${epId}" =~ ^[0-9]+$ ]]; then
                 printOutput "3" "Found episode ID: ${epId}"
             else
-                badExit "25" "Impossible condition"
+                badExit "28" "Impossible condition"
             fi
             
             # Check to see if we should ignore the found file
