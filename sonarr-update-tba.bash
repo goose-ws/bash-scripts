@@ -639,7 +639,8 @@ for containerName in "${containerIp[@]}"; do
                 fileExists="1"
             fi
         fi
-        # Define the season and episode numbers        
+        # Define the season and episode numbers  
+        unset epCode
         storeCode="0"
         for (( i=0; i<"${#file}"; i++ )); do
             char="${file:${i}:1}"
