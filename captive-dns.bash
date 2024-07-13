@@ -12,7 +12,7 @@
 #############################
 # This script serves to manage captive DNS on a UDM Pro. Captive DNS meaning it will *force*
 # all clients to use a specific DNS server via iptables if they are not querying the DNS servers
-# set by the ${allowedDNS} range. Useful for forcing devices with hard coded DNS to use your PiHole
+# set by the ${allowedDNS[*]} range. Useful for forcing devices with hard coded DNS to use your PiHole
 # (For example, a Google Home) while being flexible enough to change that captive DNS destination
 # if the host that *should* be serving it is not, for some reason.
 
@@ -24,6 +24,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-07-13
+# Added support for multiple allowed lookup ranges (See updated .env)
+# 2024-06-28
+# Added the '-w 30' flag to iptables calls to try and avoid timeout issues
 # 2024-01-27
 # Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
@@ -63,6 +67,7 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
+
 # Define the ${PATH} for cron
 PATH="/root/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 depArr=("awk" "cp" "curl" "date" "echo" "grep" "host" "md5sum" "realpath" "basename" "rm" "iptables" "sort")
@@ -223,8 +228,8 @@ removeRules () {
 printOutput "3" "Initiating rule removal"
 while read -r i; do
     printOutput "2" "Removing iptables NAT rule ${i}"
-    iptables -t nat -D PREROUTING "${i}"
-done < <(iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
+    iptables -w 30 -t nat -D PREROUTING "${i}"
+done < <(iptables -w 30 -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
 printOutput "3" "Rule removal complete"
 }
 
@@ -233,13 +238,26 @@ printOutput "3" "Initiating rule adding"
 if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
     badExit "1" "${1} is not a valid IP address"
 fi
-if ! [[ "${2}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    badExit "2" "${2} is not a valid IP address or CIDR range"
-fi
+
+# If allowed address/CIDR is a space separated array, we need to parse each individual address
+# This should be fine, since if it's correct, it's just a space separated list of IP addresses/CIDR ranges
+# If it's not, then it will fail the below safety check
+read -r -a allowAddr <<<"${2}"
+
+unset allowAddrStr
+for z in "${allowAddr[@]}"; do
+    if ! [[ "${z}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+        badExit "2" "${z} is not a valid IP address or CIDR range"
+    else
+        allowAddrStr="${allowAddrStr}${z},"
+    fi
+done
+allowAddrStr="${allowAddrStr%,}"
+
 # Should be passed as: addRules "IP address you want redirected to" "IP address or CIDR range allowed"
 for intfc in "${vlanInterfaces[@]}"; do
     printOutput "2" "Forcing interface ${intfc} to ${1}:${dnsPort}"
-    iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
+    iptables -w 30 -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${allowAddrStr}" ! -d "${allowAddrStr}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
 done
 printOutput "3" "Rule adding complete"
 }
@@ -271,7 +289,6 @@ fi
 #############################
 trap "badExit SIGINT" INT
 trap "badExit SIGQUIT" QUIT
-trap "badExit SIGKILL" KILL
 
 #############################
 ##  Positional parameters  ##
@@ -348,7 +365,7 @@ case "${1,,}" in
         fi
     ;;
     "-r"|"--rules")
-        iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
+        iptables -w 30 -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
         cleanExit "silent"
     ;;
     "-d"|"--delete")
@@ -397,10 +414,12 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
 fi
 
 # Config specific checks
-if ! [[ "${allowedDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-    printOutput "1" "Allowed DNS (${allowedDNS}) is not a valid IP address or CIDR range"
-    varFail="1"
-fi
+for z in "${allowedDNS[@]}"; do
+    if ! [[ "${z}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+        printOutput "1" "Allowed DNS (${z}) is not a valid IP address or CIDR range"
+        varFail="1"
+    fi
+done
 if ! [[ "${primaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
     printOutput "1" "Primary DNS (${primaryDNS}) is not a valid IP address"
     varFail="1"
@@ -464,7 +483,7 @@ fi
 ##         Payload         ##
 #############################
 printOutput "2" "Verifying internet connectivity"
-if ! ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
+if ! ping -w 5 -c 1 "${tertiaryDNS}" > /dev/null 2>&1; then
     # It appears that it is not
     badExit "7" "Internet appears to be offline"
 else
@@ -472,13 +491,13 @@ else
 fi
 
 # We read this into an array as a cheap way of counting the number of results. It should only be zero or one.
-readarray -t captiveDNS < <(iptables -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
+readarray -t captiveDNS < <(iptables -w 30 -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
 if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     # No rules are set
     printOutput "3" "No DNS rules detected"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
-        addRules "${primaryDNS}" "${allowedDNS}";
+        addRules "${primaryDNS}" "${allowedDNS[*]}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from null [None set] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
@@ -534,7 +553,7 @@ elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
         # Primary test succeded
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
-        addRules "${primaryDNS}" "${allowedDNS}";
+        addRules "${primaryDNS}" "${allowedDNS[*]}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from secondary [${secondaryDNS}] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
@@ -562,7 +581,7 @@ elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
         # Primary test succeded
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
-        addRules "${primaryDNS}" "${allowedDNS}";
+        addRules "${primaryDNS}" "${allowedDNS[*]}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from tertiary [${tertiaryDNS}] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
