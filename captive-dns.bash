@@ -263,7 +263,7 @@ printOutput "3" "Rule adding complete"
 }
 
 testDNS () {
-printOutput "3" "Initiating DNS test"
+printOutput "3" "Initiating DNS test via lookup of [${testDomain}]"
 if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
     # Wait 5 seconds and try again, in case of timeout
     printOutput "1" "DNS test attempt 1 failed: ${1}"
