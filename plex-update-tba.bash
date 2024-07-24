@@ -368,7 +368,7 @@ fi
 
 # Config specific checks
 # Check Plex for TBA items, and update their metadata too
-if [[ -z "${plexContainerIp}" ]]; then
+if [[ -z "${plexIp}" ]]; then
     printOutput "1" "Please define a container name or IP address for Plex"
     varFail="1"
 fi
@@ -413,7 +413,7 @@ fi
 ##         Payload         ##
 #############################
 # Get the address to PMS
-getContainerIp "${plexContainerIp}"
+getContainerIp "${plexIp}"
 
 # Build our full address
 plexAdd="${plexScheme}://${containerIp}:${plexPort}"
