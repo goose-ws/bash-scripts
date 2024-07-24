@@ -24,6 +24,12 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-07-24
+# Rolled back the changes from the 2024-07-13 commit, as it appears the version of iptables used by
+# the UDM-P does not support multiple comma-separated addresses when using the ! inverter
+# Also added the '-w 30' flag to let iptables wait if it needs to
+# 2024-07-13
+# Added support for multiple allowed lookup ranges (See updated .env)
 # 2024-01-27
 # Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
@@ -223,8 +229,8 @@ removeRules () {
 printOutput "3" "Initiating rule removal"
 while read -r i; do
     printOutput "2" "Removing iptables NAT rule ${i}"
-    iptables -t nat -D PREROUTING "${i}"
-done < <(iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
+    iptables -w 30 -t nat -D PREROUTING "${i}"
+done < <(iptables -w 30 -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | awk '{print $1}' | sort -nr)
 printOutput "3" "Rule removal complete"
 }
 
@@ -271,7 +277,6 @@ fi
 #############################
 trap "badExit SIGINT" INT
 trap "badExit SIGQUIT" QUIT
-trap "badExit SIGKILL" KILL
 
 #############################
 ##  Positional parameters  ##
@@ -348,7 +353,7 @@ case "${1,,}" in
         fi
     ;;
     "-r"|"--rules")
-        iptables -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
+        iptables -w 30 -n -t nat -L PREROUTING --line-numbers | grep -E "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53"
         cleanExit "silent"
     ;;
     "-d"|"--delete")
@@ -464,7 +469,7 @@ fi
 ##         Payload         ##
 #############################
 printOutput "2" "Verifying internet connectivity"
-if ! ping -w 5 -c 1 ${tertiaryDNS} > /dev/null 2>&1; then
+if ! ping -w 5 -c 1 "${tertiaryDNS}" > /dev/null 2>&1; then
     # It appears that it is not
     badExit "7" "Internet appears to be offline"
 else
@@ -472,7 +477,7 @@ else
 fi
 
 # We read this into an array as a cheap way of counting the number of results. It should only be zero or one.
-readarray -t captiveDNS < <(iptables -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
+readarray -t captiveDNS < <(iptables -w 30 -n -t nat --list PREROUTING | grep -Eo "to:([0-9]{1,3}[\.]){3}[0-9]{1,3}:53" | grep -Eo "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | sort -u)
 if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     # No rules are set
     printOutput "3" "No DNS rules detected"
