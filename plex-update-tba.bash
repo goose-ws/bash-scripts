@@ -380,7 +380,7 @@ if [[ -z "${plexPort}" ]]; then
     printOutput "1" "Please define a port for Plex"
     varFail="1"
 fi
-if [[ "${plexToken}" ]]; then
+if [[ -z "${plexToken}" ]]; then
     printOutput "1" "Please define your Plex access token"
     varFail="1"
 fi
