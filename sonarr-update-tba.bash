@@ -35,6 +35,11 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-07-24
+# Removed the function to refresh Plex's metadata. Because Plex now has its own metadata service,
+# it is no longer reliable to assume that if we successfully update metadata in Sonarr, we will
+# also be able to update metadata in Plex. Instead, I have added a new standalone script to handle
+# metadata refreshes within Plex, see 'plex-update-tba.bash' in the GitHub repositry.
 # 2024-06-17
 # Removed case sensitivity when detected the season and episode of a file
 # Removed the use of egrep when obtaining the season and episode of a file
@@ -466,8 +471,6 @@ if ! docker version > /dev/null 2>&1; then
     badExit "8" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
 fi
 
-renameCount="0"
-
 for containerName in "${containerIp[@]}"; do
     printOutput "2" "Processing instance: ${containerName}"
     getContainerIp "${containerName}"
@@ -865,75 +868,11 @@ for containerName in "${containerIp[@]}"; do
             fi
             msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
             printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${episodeName}"
-            (( renameCount++ ))
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
     done
 done
-
-if [[ "${renameCount}" -ge "1" ]]; then
-    # Check Plex for TBA items, and update their metadata too
-    if [[ -n "${plexToken}" && -n "${plexScheme}" && -n "${plexContainerIp}" && -n "${plexPort}" ]]; then
-        plexSkip="0"
-        printOutput "2" "Plex token detected, attempting to check for TBA items in Plex"
-        if ! command -v "xq" > /dev/null 2>&1; then
-            printOutput "1" "The 'xq' program is required for Plex TBA functionality"
-        else
-            getContainerIp "${plexContainerIp}"
-            
-            # This serves as a sanity check for our Access Token
-            # Build our address
-            plexAdd="${plexScheme}://${containerIp}:${plexPort}"
-            printOutput "3" "Plex address: ${plexAdd}"
-
-            # Make sure PMS is reachable, and we can check our version
-            myVer="$(curl -skL -m 15 "${plexAdd}/servers?X-Plex-Token=${plexToken}")"
-            curlExitCode="${?}"
-            if [[ "${curlExitCode}" -ne "0" ]]; then
-                printOutput "1" "Unable to check local version, curl returned non-zero exit code: ${curlExitCode}"
-                plexSkip="1"
-            fi
-            myVer="$(grep -Ev "^<\?xml" <<<"${myVer}" | grep -Eo "version=\"([[:alnum:]]|\.|-)+\"")"
-            myVer="${myVer#*version=\"}"
-            myVer="${myVer%%\"*}"
-            if [[ "${myVer}" == "null" ]] || [[ -z "${myVer}" ]]; then
-                printOutput "1" "Unable to parse local version"
-                plexSkip="1"
-            else
-                printOutput "2" "Plex authentication verified"
-                printOutput "3" "Plex version: ${myVer}"
-            fi
-            
-            # Get a list of TBA items
-            if [[ "${plexSkip}" -eq "0" ]]; then
-                printOutput "2" "Checking for TBA items in the Plex library"
-                while read -r i; do
-                    plexArr+=("${i}")
-                done < <(curl -skL "${plexAdd}/search?query=TBA&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBA\").\"@key\"")
-                
-                while read -r i; do
-                    plexArr+=("${i}")
-                done < <(curl -skL "${plexAdd}/search?query=TBD&X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video | if type==\"array\" then .[] else . end | select(.\"@title\" == \"TBD\").\"@key\"")
-                
-                if [[ "${#plexArr[@]}" -ge "1" ]]; then
-                    printOutput "2" "Detected ${#plexArr[@]} items in Plex under a \"TBA/TBD\" title"
-                    for key in "${!plexArr[@]}"; do
-                        plexFile="$(curl -skL "${plexAdd}${plexArr[${key}]}?X-Plex-Token=${plexToken}" | xq | jq -M -r ".MediaContainer.Video.Media.Part.\"@file\"")"
-                        printOutput "2" "Issuing refresh call to Plex for: ${plexFile}"
-                        curl -skL "${plexAdd}${plexArr[${key}]}/refresh?X-Plex-Token=${plexToken}" -X PUT
-                        curlExitCode="${?}"
-                        if [[ "${curlExitCode}" -ne "0" ]]; then
-                            printOutput "1" "Bad output - curl returned non-zero exit code: ${curlExitCode}"
-                        fi
-                    done
-                else
-                    printOutput "2" "No TBA items detected in the Plex library"
-                fi
-            fi
-        fi
-    fi
-fi
 
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -ne "0" ]]; then
     dockerHost="$(</etc/hostname)"
