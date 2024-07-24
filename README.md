@@ -34,7 +34,7 @@ Scripts here include:
 
 | `plex-update-tba.bash` |
 | :---: |
-| A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. |
+| A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. Requires [yq](https://github.com/mikefarah/yq). |
 | Link to Script: [plex-update-tba.bash](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.bash) |
 | Link to `.env` File: [plex-update-tba.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.env.example) |
 
