@@ -32,6 +32,14 @@ Scripts here include:
 
 ---
 
+| `plex-update-tba.bash` |
+| :---: |
+| A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. |
+| Link to Script: [plex-update-tba.bash](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.bash) |
+| Link to `.env` File: [plex-update-tba.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.env.example) |
+
+---
+
 | `sonarr-group-notifications.bash` |
 | :---: |
 | ~~A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications.~~ **This script is currently undergoing a total rewrite, and will be available again...soon™** |
@@ -40,7 +48,7 @@ Scripts here include:
 
 | `sonarr-update-tba.bash` |
 | :---: |
-| A script meant to find media files with the name "TBA" in your library, and issue the necessary commands to Sonarr to attempt to rename those files. It will also attempt to find and refresh metadata for "TBA" items in your Plex library, if configured to do so. |
+| A script meant to find media files with the name "TBA" or "TBD" in your Sonarr library, and issue the necessary commands to Sonarr to attempt to rename those files. |
 | Link to Script: [sonarr-update-tba.bash](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.bash) |
 | Link to `.env` File: [sonarr-update-tba.env](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.env.example) |
 
