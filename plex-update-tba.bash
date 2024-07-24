@@ -38,7 +38,7 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("awk" "curl" "docker" "yq" "md5sum" "printf" "rm")
+depArr=("awk" "chmod" "curl" "echo" "md5sum" "printf" "yq")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
@@ -380,7 +380,7 @@ if [[ -z "${plexPort}" ]]; then
     printOutput "1" "Please define a port for Plex"
     varFail="1"
 fi
-if [[ "${plexToken}" ]]; then
+if [[ -z "${plexToken}" ]]; then
     printOutput "1" "Please define your Plex access token"
     varFail="1"
 fi
