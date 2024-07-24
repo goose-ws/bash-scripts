@@ -12,7 +12,7 @@
 #############################
 # This script serves to manage captive DNS on a UDM Pro. Captive DNS meaning it will *force*
 # all clients to use a specific DNS server via iptables if they are not querying the DNS servers
-# set by the ${allowedDNS[*]} range. Useful for forcing devices with hard coded DNS to use your PiHole
+# set by the ${allowedDNS} range. Useful for forcing devices with hard coded DNS to use your PiHole
 # (For example, a Google Home) while being flexible enough to change that captive DNS destination
 # if the host that *should* be serving it is not, for some reason.
 
@@ -24,10 +24,12 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-07-24
+# Rolled back the changes from the 2024-07-13 commit, as it appears the version of iptables used by
+# the UDM-P does not support multiple comma-separated addresses when using the ! inverter
+# Also added the '-w 30' flag to let iptables wait if it needs to
 # 2024-07-13
 # Added support for multiple allowed lookup ranges (See updated .env)
-# 2024-06-28
-# Added the '-w 30' flag to iptables calls to try and avoid timeout issues
 # 2024-01-27
 # Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
@@ -67,7 +69,6 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-
 # Define the ${PATH} for cron
 PATH="/root/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 depArr=("awk" "cp" "curl" "date" "echo" "grep" "host" "md5sum" "realpath" "basename" "rm" "iptables" "sort")
@@ -238,32 +239,19 @@ printOutput "3" "Initiating rule adding"
 if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
     badExit "1" "${1} is not a valid IP address"
 fi
-
-# If allowed address/CIDR is a space separated array, we need to parse each individual address
-# This should be fine, since if it's correct, it's just a space separated list of IP addresses/CIDR ranges
-# If it's not, then it will fail the below safety check
-read -r -a allowAddr <<<"${2}"
-
-unset allowAddrStr
-for z in "${allowAddr[@]}"; do
-    if ! [[ "${z}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        badExit "2" "${z} is not a valid IP address or CIDR range"
-    else
-        allowAddrStr="${allowAddrStr}${z},"
-    fi
-done
-allowAddrStr="${allowAddrStr%,}"
-
+if ! [[ "${2}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    badExit "2" "${2} is not a valid IP address or CIDR range"
+fi
 # Should be passed as: addRules "IP address you want redirected to" "IP address or CIDR range allowed"
 for intfc in "${vlanInterfaces[@]}"; do
     printOutput "2" "Forcing interface ${intfc} to ${1}:${dnsPort}"
-    iptables -w 30 -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${allowAddrStr}" ! -d "${allowAddrStr}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
+    iptables -t nat -A PREROUTING -i "${intfc}" -p udp ! -s "${2}" ! -d "${2}" --dport "${dnsPort}" -j DNAT --to "${1}:${dnsPort}"
 done
 printOutput "3" "Rule adding complete"
 }
 
 testDNS () {
-printOutput "3" "Initiating DNS test via lookup of [${testDomain}]"
+printOutput "3" "Initiating DNS test"
 if ! host -W 5 "${testDomain}" "${1}" > /dev/null 2>&1; then
     # Wait 5 seconds and try again, in case of timeout
     printOutput "1" "DNS test attempt 1 failed: ${1}"
@@ -414,12 +402,10 @@ if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
 fi
 
 # Config specific checks
-for z in "${allowedDNS[@]}"; do
-    if ! [[ "${z}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
-        printOutput "1" "Allowed DNS (${z}) is not a valid IP address or CIDR range"
-        varFail="1"
-    fi
-done
+if ! [[ "${allowedDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
+    printOutput "1" "Allowed DNS (${allowedDNS}) is not a valid IP address or CIDR range"
+    varFail="1"
+fi
 if ! [[ "${primaryDNS}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
     printOutput "1" "Primary DNS (${primaryDNS}) is not a valid IP address"
     varFail="1"
@@ -497,7 +483,7 @@ if [[ "${#captiveDNS[@]}" -eq "0" ]]; then
     printOutput "3" "No DNS rules detected"
     if testDNS "${primaryDNS}"; then
         # Primary test succeded
-        addRules "${primaryDNS}" "${allowedDNS[*]}";
+        addRules "${primaryDNS}" "${allowedDNS}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from null [None set] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
@@ -553,7 +539,7 @@ elif [[ "${captiveDNS[0]}" == "${secondaryDNS}" ]]; then
         # Primary test succeded
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
-        addRules "${primaryDNS}" "${allowedDNS[*]}";
+        addRules "${primaryDNS}" "${allowedDNS}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from secondary [${secondaryDNS}] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
@@ -581,7 +567,7 @@ elif [[ "${captiveDNS[0]}" == "${tertiaryDNS}" ]]; then
         # Primary test succeded
         printOutput "2" "Primary DNS check succeeded"
         removeRules;
-        addRules "${primaryDNS}" "${allowedDNS[*]}";
+        addRules "${primaryDNS}" "${allowedDNS}";
         eventText="<b>Captive DNS Status Change</b>${lineBreak}Captive DNS switched from tertiary [${tertiaryDNS}] to primary [${primaryDNS}]"
         sendTelegramMessage "${eventText}"
     else
