@@ -15,8 +15,8 @@
 #############################
 ##        Changelog        ##
 #############################
-# 2023-10-15
-# Initial commit
+# 2024-07-29
+# Initial commit, script is in 'alpha' testing at this point
 
 #############################
 ##       Installation      ##
@@ -25,11 +25,11 @@
 # 2. Download the script .env file somewhere safe
 # 3. Edit the .env file to your liking
 # 4. Create a video config directory
-#    So if you name the script "ytdlp-plex-mirror.bash"
-#    Then in the same folder you would create the directory "ytdlp-plex-mirror.sources"
+#    So if you name the script "plex-dlp-mirror.bash"
+#    Then in the same folder you would create the directory "plex-dlp-mirror.sources"
 #    And within that ".sources" directory, you would place a "source.env" file for each source
 #    you want to add. The files can be named anything, as long as they end in ".env"
-#    Here is an example source.env:
+#    Here is an example source.env: https://github.com/goose-ws/bash-scripts/blob/testing/plex-dlp-mirror.env.example
 # 5. Set the script to run on an hourly cron job, or whatever your preference is
 
 #############################
