@@ -18,6 +18,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-07-29
+# Improved some wording
 # 2024-01-27
 # Remove codecs from inside the container (Removed from .env)
 # Added support for ChuckPA's database repair tool
@@ -535,7 +537,7 @@ if [[ "${repairDatabase,,}" =~ ^(yes|true)$ ]]; then
                 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
                     dockerHost="$(</etc/hostname)"
                     printOutput "3" "Got hostname: ${dockerHost}"
-                    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for database maintenance and repair"
+                    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for database maintenance and repair, and server upgrade"
                     printOutput "2" "Telegram messaging enabled -- Passing message to function"
                     sendTelegramMessage "${eventText}"
                 fi
@@ -556,6 +558,14 @@ if [[ "${repairDatabase,,}" =~ ^(yes|true)$ ]]; then
     else
         printOutput "1" "Unable to pull newest copy of repair tool -- Skipping database repair"
     fi
+else
+	if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
+		dockerHost="$(</etc/hostname)"
+		printOutput "3" "Got hostname: ${dockerHost}"
+		eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for server upgrade"
+		printOutput "2" "Telegram messaging enabled -- Passing message to function"
+		sendTelegramMessage "${eventText}"
+	fi
 fi
 
 # Clean out the Codecs folder, because apparently that sometimes breaks things between upgrades if you don't
