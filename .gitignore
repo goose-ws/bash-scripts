@@ -4,5 +4,9 @@
 *.bak
 # Ignore .log file
 *.log
+# Ignore .txt files
+*.txt
+# Ignore .db files
+*.db
 skeleton.bash
 number_bad_exists.bash
