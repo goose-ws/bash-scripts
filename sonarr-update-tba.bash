@@ -608,12 +608,21 @@ for containerName in "${containerIp[@]}"; do
         printOutput "2" "Checking for TBA/TBD items in ${i}"
         matches="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
+            if ! docker exec "${containerName#docker:}" test -d "${i}"; then
+                printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
+                continue
+            fi
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
             done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         else
+            # Make sure our find directory actually exists
+            if ! [[ -d "${i}" ]]; then
+                printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
+                continue
+            fi
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
