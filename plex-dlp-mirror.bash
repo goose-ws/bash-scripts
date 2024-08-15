@@ -2245,6 +2245,7 @@ fi
 }
 
 function setAlbumMetadata {
+# The album's rating key should be passed as positional parameter #1
 # Get the file ID from the rating key
 ytId="$(sqDb "SELECT ID FROM audio_rating_key_by_album WHERE RATING_KEY = '${1}';")"
 
@@ -5437,16 +5438,16 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 if [[ "${dbReply}" -eq "0" ]]; then
                     # Doesn't exist, insert it
                     # Get the ID number for sqlite, since we can't have multiple rows with a ytId as its unique ID in the DB
-                    idCount="$(sqDb "SELECT SQID FROM playlist_order ORDER BY SQID DESC LIMIT 1;")"
-                    if [[ -z "${idCount}" ]]; then
-                        idCount="0"
+                    idCountQueue="$(sqDb "SELECT SQID FROM playlist_order ORDER BY SQID DESC LIMIT 1;")"
+                    if [[ -z "${idCountQueue}" ]]; then
+                        idCountQueue="0"
                     fi
-                    if [[ "${idCount}" =~ ^[0-9]+$ ]]; then
-                        (( idCount++ ))
+                    if [[ "${idCountQueue}" =~ ^[0-9]+$ ]]; then
+                        (( idCountQueue++ ))
                     else
-                        badExit "224" "SQLite returned non-interger for ID count [${idCount}]"
+                        badExit "224" "SQLite returned non-interger for ID count [${idCountQueue}]"
                     fi
-                    if sqDb "INSERT INTO playlist_order (SQID, ID, PLAYLIST_INDEX, PLAYLIST_KEY, UPDATED) VALUES (${idCount}, '${ytId}', ${pos}, '${plId}', $(date +%s));"; then
+                    if sqDb "INSERT INTO playlist_order (SQID, ID, PLAYLIST_INDEX, PLAYLIST_KEY, UPDATED) VALUES (${idCountQueue}, '${ytId}', ${pos}, '${plId}', $(date +%s));"; then
                         printOutput "4" "Added file ID [${ytId}] to database to playlist [${plTitle}]"
                     else
                         badExit "225" "Adding file ID [${ytId}][Pos: ${pos}] to database under playlist ID [${plId}] failed"
@@ -5526,8 +5527,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
     fi
 
     # Start by checking to see if there are any videos in the queue
-    # I have no evidence randomizing the queue helps with blocking/throttling, but it couldn't hurt?
-    readarray -t vidQueue < <(sqDb "SELECT ID from source_videos WHERE VID_STATUS = 'queued' OR AUD_STATUS = 'queued' ORDER BY RANDOM();")
+    readarray -t vidQueue < <(sqDb "SELECT ID from source_videos WHERE VID_STATUS = 'queued' OR AUD_STATUS = 'queued';")
     
     if [[ "${#vidQueue[@]}" -ge "1" ]]; then
         printOutput "3" "############# Processing queued downloads #############"
@@ -5539,7 +5539,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
         itemCount="$(( itemCountVid + itemCountAud + itemCountBoth + itemCountBoth ))"
         printOutput "3" "Processing ${itemCount} items in download queue [${itemCountVid} video][${itemCountAud} audio][${itemCountBoth} both raw][$(( itemCountBoth + itemCountBoth )) both corrected]"
         n="1"
-        idCount="1"
+        idCountQueue="1"
         for ytId in "${vidQueue[@]}"; do
             printOutput "4" "Processing file ID [${ytId}]"
             
@@ -5552,9 +5552,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             vidTitle="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${ytId}';")"
             # Validate it
             if [[ -z "${vidTitle}" ]]; then
-                printOutput "1" "Video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5562,9 +5562,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId}';")"
             # Validate it
             if [[ -z "${vidTitleClean}" ]]; then
-                printOutput "1" "Clean video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Clean video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5572,9 +5572,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId}';")"
             # Validate it
             if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                printOutput "1" "Channel ID lookup for file ID [${ytId}] returned invalid result [${channelId}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Channel ID lookup for file ID [${ytId}] returned invalid result [${channelId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5582,9 +5582,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             channelName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
             # Validate it
             if [[ -z "${channelName}" ]]; then
-                printOutput "1" "Channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5592,9 +5592,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId}';")"
             # Validate it
             if [[ -z "${channelNameClean}" ]]; then
-                printOutput "1" "Sanitized channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Sanitized channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5609,9 +5609,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
             vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId}';")"
             # Validate it
             if ! [[ "${vidYear}" =~ ^[0-9][0-9][0-9][0-9]$ ]]; then
-                printOutput "1" "Year lookup for file ID [${ytId}] returned invalid result [${vidYear}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                printOutput "1" "Year lookup for file ID [${ytId}] returned invalid result [${vidYear}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                 (( n++ ))
-                (( idCount++ ))
+                (( idCountQueue++ ))
                 continue
             fi
 
@@ -5686,9 +5686,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         vidTitleCleanMove="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${z}';")"
                         # Validate it
                         if [[ -z "${vidTitleCleanMove}" ]]; then
-                            printOutput "1" "Clean video title lookup for file ID [${z}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                            printOutput "1" "Clean video title lookup for file ID [${z}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                             (( n++ ))
-                            (( idCount++ ))
+                            (( idCountQueue++ ))
                             continue
                         fi
 
@@ -5761,7 +5761,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         fi
                     fi
                     (( orderNum++ ))
-                done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} AND VID_STATUS = 'downloaded' ORDER BY TIMESTAMP ASC;")
+                done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} ORDER BY TIMESTAMP ASC;")
             fi
 
             if ! [[ "${videoOutput}" == "none" ]] && ! [[ "${vidStatus}" == "downloaded" ]] ; then
@@ -5788,9 +5788,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 videoOutput="$(sqDb "SELECT VID_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
                 # This is already validated, so we just need to check and make sure it's not blank
                 if [[ -z "${videoOutput}" ]]; then
-                    printOutput "1" "Invalid video format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Invalid video format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
@@ -5798,9 +5798,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 sponsorblockOpts="$(sqDb "SELECT SB_OPTIONS FROM source_videos WHERE ID = '${ytId}';")"
                 # This is already validated, so we just need to check and make sure it's not blank
                 if [[ -z "${sponsorblockOpts}" ]]; then
-                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
@@ -5825,7 +5825,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                             dlpError="${z}"
                         fi
                     done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                         # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                      # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 else
                     startTime="$(($(date +%s%N)/1000000))"
@@ -5835,7 +5835,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                             dlpError="${z}"
                         fi
                     done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                         # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                      # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 fi
 
@@ -5852,7 +5852,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                                 dlpError="${z}"
                             fi
                         done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                             # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                         endTime="$(($(date +%s%N)/1000000))"
                     else
                         while read -r z; do
@@ -5862,7 +5862,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                                 dlpError="${z}"
                             fi
                         done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                             # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                         endTime="$(($(date +%s%N)/1000000))"
                     fi
                 fi
@@ -5879,7 +5879,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                                 dlpError="${z}"
                             fi
                         done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                             # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                         endTime="$(($(date +%s%N)/1000000))"
                     else
                         startTime="$(($(date +%s%N)/1000000))"
@@ -5889,7 +5889,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                                 dlpError="${z}"
                             fi
                         done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                             # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                         endTime="$(($(date +%s%N)/1000000))"
                     fi
                 else
@@ -5906,19 +5906,19 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         printOutput "1" "${z}"
                     done
                     printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     if ! sqDb "UPDATE source_videos SET VID_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
                         badExit "240" "Unable to update status to [failed] for file ID [${ytId}]"
                     fi
                     
                     if [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: Join this channel to get access to members-only content like this video, and other exclusive perks." ]]; then
                         # It's a members-only video. Mark it as 'skipped' rather than 'failed'.                        
-                        if ! sqDb "UPDATE source_videos SET VID_STATUS = 'skipped', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
+                        if ! sqDb "UPDATE source_videos SET TYPE = 'members_only', VID_STATUS = 'skipped', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
                             badExit "240" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
                         fi
                     fi
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 else
                     printOutput "4" "Download complete [$(timeDiff "${startTime}" "${endTime}")]"
@@ -5931,12 +5931,12 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         printOutput "1" "${z}"
                     done
                     printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     if ! sqDb "UPDATE source_videos SET VID_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
                         badExit "241" "Unable to update status to [failed] for file ID [${ytId}]"
                     fi
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
@@ -5944,20 +5944,20 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 if ! mv "${tmpDir}/${ytId}.mp4" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
                     printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/Season ${vidYear}] -- Skipping"
                     (( n++ ))
-                (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 else
                     # Make sure we can move the thumbnail from tmp to destination
                     if ! mv "${tmpDir}/${ytId}.jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
                         printOutput "1" "Failed to move thumbnail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/Season ${vidYear}] -- Skipping"
                         (( n++ ))
-                (( idCount++ ))
+                        (( idCountQueue++ ))
                         continue
                     fi
                 fi
 
                 if [[ -e "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
-                    printOutput "3" "Downloaded video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "3" "Downloaded video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     msgArr+=("Downloaded video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]")
                     if [[ "${flagNewVideoDir}" -eq "1" ]]; then
                         newVideoDir+=("${channelId}")
@@ -6003,9 +6003,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 audioOutput="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
                 # This is already validated, so we just need to check and make sure it's not blank
                 if [[ -z "${audioOutput}" ]]; then
-                    printOutput "1" "Invalid audio format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Invalid audio format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
@@ -6013,9 +6013,9 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 sponsorblockOpts="$(sqDb "SELECT SB_OPTIONS FROM source_videos WHERE ID = '${ytId}';")"
                 # This is already validated, so we just need to check and make sure it's not blank
                 if [[ -z "${sponsorblockOpts}" ]]; then
-                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
@@ -6136,12 +6136,12 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         fi
                     done
                     printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
                         badExit "246" "Unable to update status to [failed] for file ID [${ytId}]"
                     fi
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 else
                     printOutput "4" "Download complete [$(timeDiff "${startTime}" "${endTime}")]"
@@ -6154,31 +6154,31 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         printOutput "1" "${z}"
                     done
                     printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
                         badExit "247" "Unable to update status to [failed] for file ID [${ytId}]"
                     fi
                     (( n++ ))
-                    (( idCount++ ))
+                    (( idCountQueue++ ))
                     continue
                 fi
 
                 # Make sure we can move the audio from tmp to destination
                 if ! mv "${tmpDir}/${ytId}.${audioOutput}" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}"; then
-                    printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                     continue
                 else
                     # Make sure we can move the thumbnail from tmp to destination
                     if ! mv "${tmpDir}/${ytId}.${audioOutput}.jpg" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/cover.jpg"; then
-                        printOutput "1" "Failed to move thumbail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCount}]"
+                        printOutput "1" "Failed to move thumbail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
                         (( n++ ))
-                        (( idCount++ ))
+                        (( idCountQueue++ ))
                         continue
                     fi
                 fi
 
                 if [[ -e "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}" ]]; then
-                    printOutput "3" "Downloaded audio [${channelName} - ${vidTitle}] [Item ${n} of ${itemCount}][${idCount}]"
+                    printOutput "3" "Downloaded audio [${channelName} - ${vidTitle}] [Item ${n} of ${itemCount}][${idCountQueue}]"
                     msgArr+=("Downloaded audio [${channelName} - ${vidTitle}]")
                     if [[ "${flagNewAudioDir}" -eq "1" ]]; then
                         newAudioDir+=("${channelId}")
@@ -6197,7 +6197,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                 fi
                 (( n++ ))
             fi
-            (( idCount++ ))
+            (( idCountQueue++ ))
         done
         if [[ -n "${videoCount}" && "${videoCount}" -gt "0" ]]; then
             printOutput "4" "Downloaded [${videoCount}] video files"
@@ -6320,14 +6320,14 @@ for i in "${albumsToProcess[@]}"; do
     fi
     # Validate it
     if [[ -z "${artistRatingKey}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
+        printOutput "1" "No artist rating key returned for channel ID [${artistChanId}] -- Skipping"
+        continue
     elif [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
         # Expected outcome
         true
     elif ! [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${artistRatingKey}] failed to validate as an interger"
-        return 1
+        printOutput "1" "Artist rating key returned non-interger [${artistRatingKey}] for channel ID [${artistChanId}] -- Skipping"
+        continue
     else
         badExit "253" "Impossible condition"
     fi
@@ -6341,14 +6341,14 @@ for i in "${albumsToProcess[@]}"; do
         albumYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${i}';")"
         # Validate it
         if [[ -z "${albumYear}" ]]; then
-            printOutput "1" "No data provided to validate interger"
-            return 1
+            printOutput "1" "No album rating key returned for file ID [${i}] -- Skipping"
+            continue
         elif [[ "${albumYear}" =~ ^[0-9]+$ ]]; then
             # Expected outcome
             true
         elif ! [[ "${albumYear}" =~ ^[0-9]+$ ]]; then
-            printOutput "1" "Data [${albumYear}] failed to validate as an interger"
-            return 1
+            printOutput "1" "Album rating key returned non-interger [${albumYear}] for file ID [${i}] -- Skipping"
+            continue
         else
             badExit "254" "Impossible condition"
         fi
@@ -6401,9 +6401,13 @@ for i in "${albumsToProcess[@]}"; do
             done
         fi
     fi
-
-    if ! setAlbumMetadata "${albumRatingKey}"; then
-        printOutput "1" "Failed to update metadata for album rating key [${ratingKey}]"
+    
+    if [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
+        if ! setAlbumMetadata "${albumRatingKey}"; then
+            printOutput "1" "Failed to update metadata for album rating key [${ratingKey}]"
+        fi
+    else
+        printOutput "1" "Unable to attempt to set metadata for file ID [${i}], found album rating key [${albumRatingKey}]"
     fi
 done
 
