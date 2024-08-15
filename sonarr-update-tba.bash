@@ -35,6 +35,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-08-15
+# Updated the 'getContainerIp' function to handle networking types which have dashes in their name.
+# While sonarr currently only returns JSON in API calls, I may still move away from 'jq' in the future,
+# in favor of 'yq', which does not experience this dash-breaking behavior.
 # 2024-07-24
 # Removed the function to refresh Plex's metadata. Because Plex now has its own metadata service,
 # it is no longer reliable to assume that if we successfully update metadata in Sonarr, we will
