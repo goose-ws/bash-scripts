@@ -35,6 +35,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-08-15
+# Updated the 'getContainerIp' function to handle networking types which have dashes in their name.
+# While sonarr currently only returns JSON in API calls, I may still move away from 'jq' in the future,
+# in favor of 'yq', which does not experience this dash-breaking behavior.
 # 2024-07-24
 # Removed the function to refresh Plex's metadata. Because Plex now has its own metadata service,
 # it is no longer reliable to assume that if we successfully update metadata in Sonarr, we will
@@ -325,7 +329,7 @@ if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1
                     containerIp="127.0.0.1"
                 else
                     printOutput "3" "Networking type: ${i}"
-                    containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
+                    containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[] | .NetworkSettings.Networks.\"${i}\".IPAddress")"
                     if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
                         break
                     fi
@@ -608,12 +612,21 @@ for containerName in "${containerIp[@]}"; do
         printOutput "2" "Checking for TBA/TBD items in ${i}"
         matches="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
+            if ! docker exec "${containerName#docker:}" test -d "${i}"; then
+                printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
+                continue
+            fi
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
             done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         else
+            # Make sure our find directory actually exists
+            if ! [[ -d "${i}" ]]; then
+                printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
+                continue
+            fi
             while read -r ii; do
                 printOutput "3" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
