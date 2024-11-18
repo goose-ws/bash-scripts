@@ -1,5 +1,6 @@
 # Ignore prod .env files
 *.env
+plex-dlp-mirror.sources/*.env
 # Ignore .bak files
 *.bak
 # Ignore .log file
