@@ -879,8 +879,8 @@ for containerName in "${containerIp[@]}"; do
             if [[ -z "${episodeName}" ]]; then
                 episodeName="[Unable to retrieve]"
             fi
-            msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
-            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${episodeName}"
+            msgArr+=("[${containerName}] Renamed file ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
+            printOutput "2" "Renamed file ${seriesTitle} - ${epCode} to: ${episodeName}"
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
