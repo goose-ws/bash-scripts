@@ -19,6 +19,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-11-18
+# Mostly a total rewrite. Still need to bang out collection/playlist functionality, but seems to be
+# working well otherwise.
 # 2024-07-29
 # Initial commit, script is in 'alpha' testing at this point
 
