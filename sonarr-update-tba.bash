@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-11-18
+# Small verbiage update
 # 2024-08-15
 # Updated the 'getContainerIp' function to handle networking types which have dashes in their name.
 # While sonarr currently only returns JSON in API calls, I may still move away from 'jq' in the future,
