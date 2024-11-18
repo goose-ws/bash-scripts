@@ -16,6 +16,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-11-18
+# Small verbiage update
 # 2024-07-24
 # Initial commit
 
@@ -550,8 +552,8 @@ if [[ "${#plexArr[@]}" -ge "1" ]]; then
         fi
         newTitle="$(yq -p xml ".MediaContainer.Video.\"+@title\"" <<<"${curlOutput}")"
         if ! [[ "${newTitle}" =~ ^TB[AD]$ ]]; then
-            printOutput "3" "Successful rename to [${newTitle}]"
-            msgArr+=("Renamed ${titleArr[${ratingKey}]} to: ${newTitle}")
+            msgArr+=("Renamed media item ${titleArr[${ratingKey}]} to: ${newTitle}")
+            printOutput "3" "Renamed media item ${titleArr[${ratingKey}]} to: ${newTitle}"
         else
             printOutput "4" "No new title available"
         fi
