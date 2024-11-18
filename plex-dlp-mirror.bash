@@ -3201,11 +3201,14 @@ fi
 if ! [[ -d "${outputDir}" ]]; then
     printOutput "1" "Video output dir [${outputDir}] does not appear to exist -- Please create it, and add it to Plex"
     varFail="1"
+else
+    outputDir="${outputDir%/}"
 fi
 if [[ -z "${tmpDir}" ]]; then
     printOutput "1" "Temporary directory [${tmpDir}] is not set"
     varFail="1"
 else
+    tmpDir="${tmpDir%/}"
     # Create our tmpDir
     if ! [[ -d "${tmpDir}" ]]; then
         if ! mkdir -p "${tmpDir}"; then
