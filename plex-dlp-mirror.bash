@@ -30,31 +30,18 @@
 # 3. Set up your Videos folder in Plex:
 #     - On your Plex Media Server, do "Add a library"
 #     - Select your library type: TV Shows
-#     - Add folders: Path to your ${videoOutputDir}
+#     - Add folders: Path to your ${outputDir}
 #     - Advanced > Scanner: Plex Series Scanner
 #     - Advanced > Agent: Personal Media Shows
 #     * You probably also want to disable Intro/Credit detection, and Ad Detection
-# 4. Set up your Music folder in Plex:
-#     - On your Plex Media Server, do "Add a library"
-#     - Select your library type: Music
-#     - Add folders: Path to your ${audioOutputDir}
-#     - Advanced > Scanner: Plex Music Scanner
-#     - Advanced > Agent: Personal Media Artists
-#     - Advanced > Prefer local metadata: Yes
-#     - Advanced > Album Art: Local Files Only
-#     * You probably also want to disable:
-#        Artist Bios
-#        Album Reviews and Critic Ratings
-#        Popular Tracks
-#        Concerts
-# 3. Edit the .env file to your liking
-# 4. Create a video config directory
+# 4. Edit the .env file to your liking
+# 5. Create a video config directory
 #    So if you name the script "plex-dlp-mirror.bash"
 #    Then in the same folder you would create the directory "plex-dlp-mirror.sources"
-#    And within that ".sources" directory, you would place a "source.env" file for each source
+#    And within that directory, you would place a "source.env" file for each source
 #    you want to add. The files can be named anything, as long as they end in ".env"
 #    Here is an example source.env: https://github.com/goose-ws/bash-scripts/blob/testing/plex-dlp-mirror.env.example
-# 5. Set the script to run on an hourly cron job, or whatever your preference is
+# 6. Set the script to run via cron on whatever your time preference is
 
 #############################
 ##      Sanity checks      ##
@@ -104,7 +91,7 @@ scriptStart="$(($(date +%s%N)/1000000))"
 #############################
 if [[ -e "${lockFile}" ]]; then
     if kill -s 0 "$(<"${lockFile}")" > /dev/null 2>&1; then
-        echo "Lockfile present, refusing to run"
+        echo "Lockfile present [PID $(<"${lockFile}")], refusing to run"
         exit 0
     else
         echo "Removing stale lockfile for PID $(<"${lockFile}")"
@@ -144,8 +131,10 @@ fi
 
 function badExit {
 apiCount
-if ! rm -rf "${tmpDir}"; then
-    printOutput "1" "Failed to clean up tmp folder [${tmpDir}]"
+if [[ -n "${tmpDir}" ]]; then
+    if ! rm -rf "${tmpDir}"; then
+        printOutput "1" "Failed to clean up tmp folder [${tmpDir}]"
+    fi
 fi
 removeLock
 if [[ -z "${2}" ]]; then
@@ -166,8 +155,10 @@ if [[ "${1}" == "silent" ]]; then
     removeLock "--silent"
 else
     apiCount
-    if ! rm -rf "${tmpDir}"; then
-        printOutput "1" "Failed to clean up tmp folder [${tmpDir}]"
+    if [[ -n "${tmpDir}" ]]; then
+        if ! rm -rf "${tmpDir}"; then
+            printOutput "1" "Failed to clean up tmp folder [${tmpDir}]"
+        fi
     fi
     if [[ "${#errorArr[@]}" -ne "0" ]]; then
         printOutput "1" "=== Error Log ==="
@@ -181,12 +172,18 @@ fi
 exit 0
 }
 
-function callCurl {
+function callCurlGet {
 # URL to call should be ${1}
+# Custom UA can be ${2}
+# Will return the variable ${curlOutput}
 if [[ -z "${1}" ]]; then
     badExit "1" "No input URL provided for GET"
 fi
-curlOutput="$(curl -skL -m 15 "${1}" 2>&1)"
+if [[ -z "${2}" ]]; then
+    curlOutput="$(curl -skL -m 15 "${1}" 2>&1)"
+else
+    curlOutput="$(curl -skL -m 15 -A "${2}" "${1}" 2>&1)"
+fi
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -eq "28" ]]; then
     printOutput "2" "Curl timed out, waiting 10 seconds then trying again"
@@ -254,7 +251,7 @@ fi
 function sendTelegramMessage {
 # Message to send should be passed as function positional parameter #1
 # We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
-callCurl "https://api.telegram.org/bot${telegramBotId}/getMe"
+callCurlGet "https://api.telegram.org/bot${telegramBotId}/getMe"
 if ! [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
     printOutput "1" "Telegram bot API check failed"
 else
@@ -263,11 +260,11 @@ else
         if [[ -n "${2}" ]]; then
             chanId="${2}"
         fi
-        callCurl "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}"
+        callCurlGet "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}"
         if [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
             printOutput "4" "Telegram channel authenticated [$(yq -p json ".result.title" <<<"${curlOutput}")]"
-            msgEncoded="$(rawurlencode "${1}")"
-            callCurl "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html&text=${msgEncoded}"
+            msgEncoded="$(rawUrlEncode "${1}")"
+            callCurlGet "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html&text=${msgEncoded}"
             # Check to make sure Telegram returned a true value for ok
             if ! [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
                 printOutput "1" "Failed to send Telegram message:"
@@ -353,9 +350,12 @@ fi
 if [[ "${apiCallsLemnos}" -ne "0" ]]; then
     printOutput "3" "Made [${apiCallsLemnos}] API calls to LemnosLife"
 fi
+if [[ "${apiCallsSponsor}" -ne "0" ]]; then
+    printOutput "3" "Made [${apiCallsSponsor}] API calls to SponsorBlock"
+fi 
 }
 
-function rawurlencode {
+function rawUrlEncode {
 local string="${1}"
 local strlen="${#string}"
 local encoded=""
@@ -372,6 +372,53 @@ done
 echo "${encoded}"
 }
 
+function sqDb {
+# Log the command we're executing to the database, for development purposes
+# Execute the command
+if sqOutput="$(sqlite3 "${sqliteDb}" "${1}" 2>&1)"; then
+    if [[ -n "${sqOutput}" ]]; then
+        echo "${sqOutput}"
+    fi
+else
+    sqlite3 "${sqliteDb}" "INSERT INTO db_log (TIME, COMMAND, RESULT, OUTPUT) VALUES ('$(date)', '${1//\'/\'\'}', 'Failure', '${sqOutput//\'/\'\'}');"
+    if [[ -n "${sqOutput}" ]]; then
+        echo "${sqOutput}"
+    fi
+    return 1
+fi
+}
+
+function randomSleep {
+# ${1} is minumum seconds, ${2} is maximum
+# If no min/max set, min=5 max=30
+if [[ -z "${1}" ]]; then
+    sleepTime="$(shuf -i 5-30 -n 1)"
+else
+    sleepTime="$(shuf -i "${1}"-"${2}" -n 1)"
+fi
+printOutput "4" "Pausing for ${sleepTime} seconds before continuing"
+sleep "${sleepTime}"
+}
+
+function printAngryWarning {
+printOutput "2" " __          __              _             _ "
+printOutput "2" " \ \        / /             (_)           | |"
+printOutput "2" "  \ \  /\  / /_ _ _ __ _ __  _ _ __   __ _| |"
+printOutput "2" "   \ \/  \/ / _\` | '__| '_ \| | '_ \ / _\` | |"
+printOutput "2" "    \  /\  / (_| | |  | | | | | | | | (_| |_|"
+printOutput "2" "     \/  \/ \__,_|_|  |_| |_|_|_| |_|\__, (_)"
+printOutput "2" "                                      __/ |  "
+printOutput "2" "                                     |___/   "
+}
+
+function throttleDlp {
+if ! [[ "${throttleMin}" -eq "0" && "${throttleMax}" -eq "0" ]]; then
+    printOutput "4" "Throttling after yt-dlp download call"
+    randomSleep "${throttleMin}" "${throttleMax}"
+fi
+}
+
+## Curl functions
 function callCurlPost {
 # URL to call should be ${1}
 if [[ -z "${1}" ]]; then
@@ -452,1869 +499,635 @@ if [[ "${curlExitCode}" -ne "0" ]]; then
 fi
 }
 
-function randomSleep {
-# ${1} is minumum seconds, ${2} is maximum
-# If no min/max set, min=5 max=30
-if [[ -z "${1}" ]]; then
-    sleepTime="$(shuf -i 5-30 -n 1)"
-else
-    sleepTime="$(shuf -i "${1}"-"${2}" -n 1)"
-fi
-printOutput "4" "Pausing for ${sleepTime} seconds before continuing"
-sleep "${sleepTime}"
-}
+## Indexing functions
+function ytIdToDb {
+unset dbCount vidTitle vidTitleClean channelId uploadDate epochDate uploadYear vidDesc vidType vidStatus vidError sponsorCurl
+# Get the video info
+# Because we can't get the time string through yt-dlp, there's no point in trying to use it as our fake API here, we *have* to API query YouTube
 
-function refreshLibrary {
-# Issue a "Scan Library" command -- The desired library ID must be passed as ${1}
-if [[ -z "${1}" ]]; then
-    badExit "11" "No library ID passed to be scanned"
-fi
-printOutput "3" "Issuing a 'Scan Library' command to Plex for library ID [${1}]"
-callCurl "${plexAdd}/library/sections/${1}/refresh?X-Plex-Token=${plexToken}"
-}
-
-function updateAristRatingKey {
-# Channel ID should be passed as ${1}
-if [[ -z "${1}" ]]; then
-    printOutput "1" "No channel ID passed for artist rating key update"
-    return 1
-fi
-chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1}';")"
-if [[ -z "${chanName}" ]]; then
-    printOutput "1" "Unable to retrieve channel name from database via channel ID [${1}]"
-    return 1
-fi
-printOutput "3" "Retrieving rating key from Plex for artist [${chanName}] with channel ID [${1}]"
-# Can we take the easy way out? Try to match the series by name
-lookupMatch="0"
-# Get a list of all the series in the video library
-callCurl "${plexAdd}/library/sections/${audioLibraryId}/all?X-Plex-Token=${plexToken}"
-# See if we can flatly match any of these via ${chanName}
-artistRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${chanName}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-if [[ -n "${artistRatingKey}" ]]; then
-    # We could!
-    # Validate it
-    if [[ -z "${artistRatingKey}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${artistRatingKey}] failed to validate as an interger"
-        return 1
-    else
-        badExit "12" "Impossible condition"
-    fi
-    
-    printOutput "5" "Located artist rating key [${artistRatingKey}] via most efficient lookup method"
-    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${1}';")"
-    if [[ "${dbCount}" -eq "0" ]]; then
-        # It does not exist in the database, use an 'insert'
-        if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${artistRatingKey}, '${1}', $(date +%s));"; then
-            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-        else
-            badExit "13" "Adding artist rating key [${artistRatingKey}] to database failed"
-        fi
-    elif [[ "${dbCount}" -eq "1" ]]; then
-        # It exists in the database, use an 'update'
-        if sqDb "UPDATE audio_rating_key_by_channel SET RATING_KEY = ${artistRatingKey}, UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1}';"; then
-            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-        else
-            badExit "14" "Adding artist rating key [${artistRatingKey}] to database failed"
-        fi
-    else
-        badExit "15" "Database count for channel ID [${1}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-    fi
-    lookupMatch="1"
-else
-    # We could not
-    # Best way would be the first episode of the first season of the channel ID in question
-    firstEpisode="$(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${1}' ORDER BY TIMESTAMP ASC LIMIT 1;")"
-    # Having the year would help as we can skip series which do not have the first year season we want
-    firstYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${firstEpisode}';")"
-    # To do this, we need to find a matching episode by YT ID in Plex
-    # The "lazy" way to do this is to only compare items which have the same first character as our channel name
-    chanNameCompare="${chanName:0:1}"
-    # Don't recycle old variable data
-    unset plexTitleArr notSearchedArr
-    # Extract a list of item titles from Plex, to an array
-    readarray -t plexTitleArr <<<"$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@title\"" <<<"${curlOutput}")"
-    for z in "${!plexTitleArr[@]}"; do
-        # Get the first letter
-        plexNameCompare="${plexTitleArr[${z}]:0:1}"
-        # Compare it to the first letter of our series
-        if [[ "${plexNameCompare^}" == "${chanNameCompare^}" ]]; then
-            # The first characters match, get artist's rating key so we can investigate further
-            artistRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -z "${artistRatingKey}" ]]; then
-                printOutput "1" "Failed to retrieve rating key for [${plexTitleArr[${z}]}] -- Skipping series lookup"
-                continue
-            elif ! [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Rating key for [${plexTitleArr[${z}]}] returned non-interger [${artistRatingKey}] -- Skipping series lookup"
-                continue
-            fi
-            # Get the rating key of a season that matches our video year
-            callCurl "${plexAdd}/library/metadata/${artistRatingKey}/children?X-Plex-Token=${plexToken}"
-            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            
-            if [[ -z "${seasonRatingKey}" ]]; then
-                printOutput "1" "No data provided to validate interger"
-                return 1
-            elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                # Expected outcome
-                true
-            elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Data [${seasonRatingKey}] failed to validate as an interger"
-                return 1
-            else
-                badExit "16" "Impossible condition"
-            fi
-            
-            if [[ -n "${seasonRatingKey}" ]]; then
-                callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first season
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                if [[ -z "${firstEpisodeId}" ]]; then
-                    printOutput "1" "Failed to isolite ID for first episode of [${plexTitleArr[${z}]}] season [${firstYear}] -- Skipping series lookup"
-                    continue
-                fi
-                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and hope for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    # We've matched!
-                    lookupMatch="1"
-                    printOutput "5" "Located artist rating key [${artistRatingKey}] via semi-efficient lookup method"
-                    # While we're already here, grab the rating key for the individual episode/file
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    audioFileRatingKey["_${firstEpisode}"]="${fileRatingKeyTmp}"
-
-                    # Add the artist rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${1}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${artistRatingKey}, '${1}', $(date +%s));"; then
-                            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-                        else
-                            badExit "17" "Adding artist rating key [${artistRatingKey}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_channel SET RATING_KEY = ${artistRatingKey}, UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1}';"; then
-                            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-                        else
-                            badExit "18" "Adding artist rating key [${artistRatingKey}] to database failed"
-                        fi
+# There is a possibility that we only need to query the SponsorBlock API, if this video is just being checkd for an upgrade
+# If we're not skipping the video, and SponsorBlock is enabled, check for availability for our video
+dbCount="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+if [[ "${dbCount}" -eq "1" ]]; then
+    vidStatus="$(sqDb "SELECT STATUS FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+    # If the video status is not skipped
+    if ! [[ "${vidStatus}" == "skipped" ]]; then
+        # And the video status is not import
+        if ! [[ "${vidStatus}" == "import" ]]; then
+            # And SponsorBlock is not disabled
+            if ! [[ "${sponsorblockEnable}" == "disable" ]]; then
+                # Get the SponsorBlock status of the video
+                sponsorApiCall "searchSegments?videoID=${1}"
+                sponsorCurl="${curlOutput}"
+                # If it is not found
+                if [[ "${sponsorCurl}" == "Not Found" ]]; then
+                    printOutput "5" "No SponsorBlock data available for video"
+                    sponsorblockAvailable="Not found [$(date)]"
+                    # And we are required to have it for download
+                    if [[ "${sponsorblockRequire}" == "true" ]]; then
+                        # Skip the download the wait for a future run
+                        vidStatus="sb_wait"
+                        vidError="SponsorBlock data required, but not available"
                     else
-                        badExit "19" "Database count for channel ID [${1}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
+                        # Check and see if we've already grabbed this video
+                        dbVidStatus="$(sqDb "SELECT SB_AVAILABLE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+                        if [[ "${sponsorblockAvailable%% \[*}" == "Not found" ]]; then
+                            # We've previously indexed this video, and SponsorBlock data was not available at that time.
+                            # It's still notavailable, so we don't need to re-download this video.
+                            printOutput "4" "Item has no updated SponsorBlock data -- Skipping"
+                            return 0
+                        fi    
                     fi
-
-                    # Add the artist's season rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE ID = '${firstEpisode}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, ID, UPDATED) VALUES (${seasonRatingKey}, '${firstEpisode}', $(date +%s));"; then
-                            printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                        else
-                            badExit "20" "Adding season rating key [${seasonRatingKey}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_album SET RATING_KEY = ${artistRatingKey}, UPDATED = $(date +%s) WHERE ID = '${firstEpisode}';"; then
-                            printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                        else
-                            badExit "21" "Adding season rating key [${seasonRatingKey}] to database failed"
-                        fi
-                    else
-                        badExit "22" "Database count for ID [${firstEpisode}] in audio_rating_key_by_album table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                    # Add the artist's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE ID = ${fileRatingKeyTmp};")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                            printOutput "5" "Added artist rating key [${fileRatingKeyTmp}] to database"
-                        else
-                            badExit "23" "Adding artist rating key [${fileRatingKeyTmp}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_item SET RATING_KEY = '${fileRatingKeyTmp}', UPDATED = $(date +%s) WHERE ID = '${firstEpisodeId}';"; then
-                            printOutput "5" "Added artist rating key [${fileRatingKeyTmp}] to database"
-                        else
-                            badExit "24" "Adding artist rating key [${fileRatingKeyTmp}] to database failed"
-                        fi
-                    else
-                        badExit "25" "Database count for artist ID [${fileRatingKeyTmp}] in audio_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                    # Break the loop
-                    break
-                fi
-            fi
-        else
-            notSearchedArr+=("${z}")
-        fi
-    done
-
-    # If we've gotten this far, and not matched anything, we should do an inefficient search with the leftover titles from the notSearchedArr[@]
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        # We may have some unwanted data from some other lookup for ${curlOutput}, so call that endpoint again
-        callCurl "${plexAdd}/library/sections/${audioLibraryId}/all?X-Plex-Token=${plexToken}"
-        for z in "${notSearchedArr[@]}"; do
-            artistRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${artistRatingKey}" ]]; then
-                printOutput "5" "Attempting lookup with artist rating key [${artistRatingKey}]"
-            else
-                continue
-            fi
-            # Get the rating key of a season that matches our video year
-            callCurl "${plexAdd}/library/metadata/${artistRatingKey}/children?X-Plex-Token=${plexToken}"
-            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            printOutput "5" "Retrieved album rating key [${seasonRatingKey}]"
-            if [[ -n "${seasonRatingKey}" ]]; then
-                callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first season
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and pray for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    lookupMatch="1"
-                    printOutput "5" "Located artist rating key [${artistRatingKey}] via least efficient lookup method"
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    audioFileRatingKey["_${firstEpisodeId}"]="${fileRatingKeyTmp}"
-
-                    # Add the artist rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${1}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${artistRatingKey}, '${1}', $(date +%s));"; then
-                            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-                        else
-                            badExit "26" "Adding artist rating key [${artistRatingKey}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_channel SET RATING_KEY = ${artistRatingKey}, UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1}';"; then
-                            printOutput "5" "Added artist rating key [${artistRatingKey}] to database"
-                        else
-                            badExit "27" "Adding artist rating key [${artistRatingKey}] to database failed"
-                        fi
-                    else
-                        badExit "28" "Database count for channel ID [${1}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                    # Add the artist's season rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE CHANNEL_ID = '${1}' AND YEAR = ${vidYear};")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES (${seasonRatingKey}, ${vidYear}, '${1}', $(date +%s));"; then
-                            printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                        else
-                            badExit "29" "Adding season rating key [${seasonRatingKey}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_album SET RATING_KEY = ${artistRatingKey}, UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1}' AND YEAR = ${vidYear};"; then
-                            printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                        else
-                            badExit "30" "Adding season rating key [${seasonRatingKey}] to database failed"
-                        fi
-                    else
-                        badExit "31" "Database count for channel ID [${1}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                    # Add the artist's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE ID = '${fileRatingKeyTmp}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                            printOutput "5" "Added artist rating key [${fileRatingKeyTmp}] to database"
-                        else
-                            badExit "32" "Adding artist rating key [${fileRatingKeyTmp}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE audio_rating_key_by_item SET RATING_KEY = '${fileRatingKeyTmp}', UPDATED = $(date +%s) WHERE ID = '${firstEpisodeId}';"; then
-                            printOutput "5" "Added artist rating key [${fileRatingKeyTmp}] to database"
-                        else
-                            badExit "33" "Adding artist rating key [${fileRatingKeyTmp}] to database failed"
-                        fi
-                    else
-                        badExit "34" "Database count for artist ID [${fileRatingKeyTmp}] in audio_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                fi
-            fi
-        done
-    fi
-
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        printOutput "1" "Unable to locate rating key for series [${chanName}]"
-    fi
-fi
-}
-
-function assignTitle {
-if [[ -z "${1}" ]]; then
-    printOutput "1" "Pass me a file ID please [1]"
-fi
-if [[ -z "${titleById[_${1}]}" ]]; then
-    titleById["_${1}"]="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${1}';")"
-fi
-}
-
-function getVideoFileRatingKey {
-# File ID should be passed as ${1}
-if [[ -z "${1}" ]]; then
-    printOutput "1" "Pass me a file ID please [2]"
-    return 1
-fi
-if [[ -n "${videoFileRatingKey[_${1}]}" ]]; then
-    # We already have it
-    # Validate it    
-    if [[ -z "${videoFileRatingKey[_${1}]}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${videoFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${videoFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${videoFileRatingKey[_${1}]}] failed to validate as an interger"
-        return 1
-    else
-        badExit "35" "Impossible condition"
-    fi
-    
-    callCurl "${plexAdd}/library/metadata/${videoFileRatingKey[_${1}]}?X-Plex-Token=${plexToken}"
-    verifyId="$(yq -p xml ".MediaContainer.Video.Media.Part.\"+@file\"" <<<"${curlOutput}")"
-    verifyId="${verifyId%\]\.*}"
-    verifyId="${verifyId##*\[}"
-    if [[ "${verifyId}" == "${1}" ]]; then
-        # We're good
-        return 0
-    fi
-else
-    # We don't have it. Maybe the database does?
-    videoFileRatingKey["_${1}"]="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_item WHERE ID = '${1}';")"
-    if [[ -n "${videoFileRatingKey[_${1}]}" ]]; then
-        # Validate it
-        if [[ -z "${videoFileRatingKey[_${1}]}" ]]; then
-            printOutput "1" "No data provided to validate interger"
-            return 1
-        elif [[ "${videoFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-            # Expected outcome
-            true
-        elif ! [[ "${videoFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-            printOutput "1" "Data [${videoFileRatingKey[_${1}]}] failed to validate as an interger"
-            return 1
-        else
-            badExit "36" "Impossible condition"
-        fi
-        callCurl "${plexAdd}/library/metadata/${videoFileRatingKey[_${1}]}?X-Plex-Token=${plexToken}"
-        verifyId="$(yq -p xml ".MediaContainer.Video.Media.Part.\"+@file\"" <<<"${curlOutput}")"
-        verifyId="${verifyId%\]\.*}"
-        verifyId="${verifyId##*\[}"
-        if [[ "${verifyId}" == "${1}" ]]; then
-            # We're good
-            # Grab the title
-            assignTitle "${1}"
-            return 0
-        fi
-    fi
-fi
-
-# Get the channel ID of our file ID
-local channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${1}';")"
-if [[ -z "${channelId}" ]]; then
-    printOutput "1" "Unable to retrieve channel ID for file ID [${1}] -- Possible database corruption"
-    return 1
-fi
-# Get the rating key for this series
-local showRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_channel WHERE CHANNEL_ID = '${channelId}';")"
-if [[ -z "${showRatingKey}" ]]; then
-    updateShowRatingKey "${channelId}"
-    local showRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_channel WHERE CHANNEL_ID = '${channelId}';")"
-    if [[ -z "${showRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve series rating key for channel ID [${channelId}]"
-        return 1
-    fi
-fi
-# Get the rating key for the season
-local vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${1}';")"
-if [[ -z "${vidYear}" ]]; then
-    printOutput "1" "Unable to retrieve year for file ID [${1}] -- Possible database corruption"
-    return 1
-fi
-local seasonRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear};")"
-if [[ -z "${seasonRatingKey}" ]]; then
-    updateSeasonRatingKey "${channelId}" "${vidYear}" "${showRatingKey}"
-    local seasonRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear};")"
-    if [[ -z "${seasonRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve series rating key for channel ID [${channelId}] year [${vidYear}]"
-        return 1
-    fi
-fi
-# Get the rating key for the file ID
-callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children/?X-Plex-Token=${plexToken}"
-readarray -t fileRatingKeys < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-for fileRatingKeyTmp in "${fileRatingKeys[@]}"; do
-    if [[ -z "${fileRatingKeyTmp}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${fileRatingKeyTmp}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${fileRatingKeyTmp}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${fileRatingKeyTmp}] failed to validate as an interger"
-        return 1
-    else
-        badExit "37" "Impossible condition"
-    fi
-    local fileId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${fileRatingKeyTmp}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-    local fileId="${fileId%\]\.*}"
-    local fileId="${fileId##*\[}"
-    if [[ "${fileId}" == "${1}" ]]; then
-        # We've matched
-        videoFileRatingKey["_${1}"]="${fileRatingKeyTmp}"
-        # Grab the title
-        assignTitle "${1}"
-        # Load it into the database
-        local dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};")"
-        if [[ "${dbCount}" -eq "0" ]]; then
-            # Nothing to do
-            true
-        elif [[ "${dbCount}" -eq "1" ]]; then
-            # Drop that outdated record
-            sqDb "DELETE FROM video_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"
-        elif [[ "${dbCount}" -gt "1" ]]; then
-            printOutput "1" "Received count [${dbCount}] from database -- Possibly corrupted"
-            sqDb "DELETE FROM video_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"
-        else
-            badExit "38" "Unexpected database count output [${dbCount}] for file ID [${fileRatingKeyTmp}]"
-        fi
-        # Now we can insert
-        if sqDb "INSERT INTO video_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES (${fileRatingKeyTmp}, '${1}', $(date +%s));"; then
-            printOutput "5" "Added item rating key [${fileRatingKeyTmp}] to database"
-        else
-            badExit "39" "Adding item rating key [${fileRatingKeyTmp}] to database failed"
-        fi
-        break
-    fi
-done
-}
-
-function updateSeasonRatingKey {
-# Channel ID is ${1}
-# Season year is ${2}
-# Show rating key is ${3}
-callCurl "${plexAdd}/library/metadata/${3}/children/?X-Plex-Token=${plexToken}"
-local seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${2}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-
-if [[ -z "${seasonRatingKey}" ]]; then
-    printOutput "1" "No data provided to validate interger"
-    return 1
-elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    true
-elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${seasonRatingKey}] failed to validate as an interger"
-    return 1
-else
-    badExit "40" "Impossible condition"
-fi
-
-# Add it to the database
-local dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_season WHERE RATING_KEY = ${seasonRatingKey};")"
-if [[ "${dbCount}" -eq "0" ]]; then
-    # Expected output
-    true
-elif [[ "${dbCount}" -eq "1" ]]; then
-    # Drop the stale rating key
-    if ! sqDb "DELETE FROM video_rating_key_by_season WHERE RATING_KEY = ${seasonRatingKey};"; then
-        badExit "41" "Failed to remove stale season rating key [${seasonRatingKey}] from video_rating_key_by_season -- Database likely corrupt"
-    fi
-else
-    badExit "42" "Database count for rating key [${seasonRatingKey}] in video_rating_key_by_season table returned unexpected output [${dbCount}] -- Possible database corruption"
-fi
-
-# Insert
-if sqDb "INSERT INTO video_rating_key_by_season (RATING_KEY, CHANNEL_ID, YEAR, UPDATED) VALUES (${seasonRatingKey}, '${1}', ${2}, $(date +%s));"; then
-    printOutput "5" "Added season rating key [${seasonRatingKey}] year [${2}] to database"
-else
-    badExit "43" "Adding season rating key [${seasonRatingKey}] year [${2}] to database failed"
-fi
-}
-
-function updateShowRatingKey {
-# Channel ID should be passed as ${1}
-if [[ -z "${1}" ]]; then
-    badExit "44" "No channel ID passed for show rating key update"
-fi
-chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1}';")"
-printOutput "3" "Retrieving rating key from Plex for show [${chanName}] with channel ID [${1}]"
-# Can we take the easy way out? Try to match the series by name
-lookupMatch="0"
-# Get a list of all the series in the video library
-callCurl "${plexAdd}/library/sections/${videoLibraryId}/all?X-Plex-Token=${plexToken}"
-# See if we can flatly match any of these via ${chanName}
-showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${chanName}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-if [[ -n "${showRatingKey}" ]]; then
-    # We could!
-    printOutput "5" "Located show rating key [${showRatingKey}] via most efficient lookup method"
-    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_channel WHERE CHANNEL_ID = '${1}';")"
-    if [[ "${dbCount}" -eq "0" ]]; then
-        # Expected output
-        true
-    elif [[ "${dbCount}" -eq "1" ]]; then
-        # Drop the stale rating key
-        if ! sqDb "DELETE FROM video_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-            badExit "45" "Failed to remove stale series rating key [${showRatingKey}] from video_rating_key_by_channel -- Database likely corrupt"
-        fi
-    else
-        badExit "46" "Database count for series rating key [${showRatingKey}] in video_rating_key_by_channel table returned unexpected output [${dbCount}] -- Possible database corruption"
-    fi
-    if sqDb "INSERT INTO video_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-        printOutput "5" "Added show rating key [${showRatingKey}] to database"
-    else
-        badExit "47" "Adding show rating key [${showRatingKey}] to database failed"
-    fi
-    lookupMatch="1"
-else
-    # We could not
-    # Best way would be the first episode of the first season of the channel ID in question
-    firstEpisode="$(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${1}' ORDER BY TIMESTAMP ASC LIMIT 1;")"
-    # Having the year would help as we can skip series which do not have the first year season we want
-    firstYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${firstEpisode}';")"
-    # To do this, we need to find a matching episode by YT ID in Plex
-    # The "lazy" way to do this is to only compare items which have the same first character as our channel name
-    chanNameCompare="${chanName:0:1}"
-    # Don't recycle old variable data
-    unset plexTitleArr notSearchedArr
-    # Extract a list of item titles from Plex, to an array
-    readarray -t plexTitleArr <<<"$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@title\"" <<<"${curlOutput}")"
-    for z in "${!plexTitleArr[@]}"; do
-        # Get the first letter
-        plexNameCompare="${plexTitleArr[${z}]:0:1}"
-        # Compare it to the first letter of our series
-        if [[ "${plexNameCompare^}" == "${chanNameCompare^}" ]]; then
-            # The first characters match, get show's rating key so we can investigate further
-            showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -z "${showRatingKey}" ]]; then
-                printOutput "1" "No data provided to validate interger"
-                return 1
-            elif [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-                # Expected outcome
-                true
-            elif ! [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Data [${showRatingKey}] failed to validate as an interger"
-                return 1
-            else
-                badExit "48" "Impossible condition"
-            fi
-            # Get the rating key of a season that matches our video year
-            callCurl "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
-            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -z "${seasonRatingKey}" ]]; then
-                printOutput "2" "No matching season with year [${firstYear}] found in series [${plexTitleArr[${z}]}] via season rating key [${seasonRatingKey}]"
-                continue
-            elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                # Expected outcome
-                true
-            elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Data [${seasonRatingKey}] failed to validate as an interger"
-                return 1
-            else
-                badExit "49" "Impossible condition"
-            fi
-            if [[ -n "${seasonRatingKey}" ]]; then
-                callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first season
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                if [[ -z "${firstEpisodeId}" ]]; then
-                    printOutput "1" "Failed to isolite ID for first episode of [${plexTitleArr[${z}]}] season [${firstYear}] -- Skipping series lookup"
-                    continue
-                fi
-                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and hope for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    # We've matched!
-                    lookupMatch="1"
-                    printOutput "5" "Located show rating key [${showRatingKey}] via semi-efficient lookup method"
-                    # While we're already here, grab the rating key for the individual episode/file
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    videoFileRatingKey["_${firstEpisodeId}"]="${fileRatingKeyTmp}"
-
-                    # Add the show rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_channel WHERE RATING_KEY = '${showRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${showRatingKey}] from video_rating_key_by_channel"
-                        else
-                            badExit "50" "Failed to remove stale rating key [${showRatingKey}] from video_rating_key_by_channel -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_channel WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from video_rating_key_by_channel"
-                        else
-                            badExit "51" "Failed to remove stale rating keys containing channel ID [${1}] from video_rating_key_by_channel -- Possible database corruption"
-                        fi
-                    else
-                        badExit "52" "Database count for rating key [${showRatingKey}] in video_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added series rating key [${showRatingKey}] to database"
-                    else
-                        badExit "53" "Adding series rating key [${showRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the season rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_season WHERE RATING_KEY = '${seasonRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_season WHERE RATING_KEY = ${seasonRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${seasonRatingKey}] from video_rating_key_by_season"
-                        else
-                            badExit "54" "Failed to remove stale rating key [${seasonRatingKey}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_season WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from video_rating_key_by_season"
-                        else
-                            badExit "55" "Failed to remove stale rating keys containing channel ID [${1}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                    else
-                        badExit "56" "Database count for rating key [${seasonRatingKey}] in video_rating_key_by_season table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_season (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES (${seasonRatingKey}, ${vidYear}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                    else
-                        badExit "57" "Adding season rating key [${seasonRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the show's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE RATING_KEY = '${fileRatingKeyTmp}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"; then
-                            printOutput "5" "Removed stale rating key [${fileRatingKeyTmp}] from video_rating_key_by_item"
-                        else
-                            badExit "58" "Failed to remove stale rating key [${fileRatingKeyTmp}] from video_rating_key_by_item -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_item WHERE ID = ${firstEpisodeId};"; then
-                            printOutput "5" "Removed stale rating keys containing file ID [${firstEpisodeId}] from video_rating_key_by_item"
-                        else
-                            badExit "59" "Failed to remove stale rating keys containing file ID [${firstEpisodeId}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                    else
-                        badExit "60" "Database count for item episode key [${fileRatingKeyTmp}] in video_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                        printOutput "5" "Added show rating key [${fileRatingKeyTmp}] to database"
-                    else
-                        badExit "61" "Adding show rating key [${fileRatingKeyTmp}] to database failed"
-                    fi
-
-                    # Break the loop
-                    break
-                fi
-            fi
-        else
-            notSearchedArr+=("${z}")
-        fi
-    done
-
-    # If we've gotten this far, and not matched anything, we should do an inefficient search with the leftover titles from the notSearchedArr[@]
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        # We may have some unwanted data from some other lookup for ${curlOutput}, so call that endpoint again
-        callCurl "${plexAdd}/library/sections/${videoLibraryId}/all?X-Plex-Token=${plexToken}"
-        for z in "${notSearchedArr[@]}"; do
-            showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${showRatingKey}" ]]; then
-                printOutput "5" "Attempting lookup with show rating key [${showRatingKey}]"
-            else
-                continue
-            fi
-            # Get the rating key of a season that matches our video year
-            callCurl "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
-            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${seasonRatingKey}" ]]; then
-                printOutput "5" "Retrieved season rating key [${seasonRatingKey}]"
-                callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first season
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and pray for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    lookupMatch="1"
-                    printOutput "5" "Located show rating key [${showRatingKey}] via least efficient lookup method"
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    videoFileRatingKey["_${firstEpisodeId}"]="${fileRatingKeyTmp}"
-
-                    # Add the show rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_channel WHERE RATING_KEY = '${showRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${showRatingKey}] from video_rating_key_by_channel"
-                        else
-                            badExit "62" "Failed to remove stale rating key [${showRatingKey}] from video_rating_key_by_channel -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_channel WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from video_rating_key_by_channel"
-                        else
-                            badExit "63" "Failed to remove stale rating keys containing channel ID [${1}] from video_rating_key_by_channel -- Possible database corruption"
-                        fi
-                    else
-                        badExit "64" "Database count for rating key [${showRatingKey}] in video_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added series rating key [${showRatingKey}] to database"
-                    else
-                        badExit "65" "Adding series rating key [${showRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the season rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_season WHERE RATING_KEY = '${seasonRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_season WHERE RATING_KEY = ${seasonRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${seasonRatingKey}] from video_rating_key_by_season"
-                        else
-                            badExit "66" "Failed to remove stale rating key [${seasonRatingKey}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_season WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from video_rating_key_by_season"
-                        else
-                            badExit "67" "Failed to remove stale rating keys containing channel ID [${1}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                    else
-                        badExit "68" "Database count for rating key [${seasonRatingKey}] in video_rating_key_by_season table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_season (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES (${seasonRatingKey}, ${vidYear}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added season rating key [${seasonRatingKey}] to database"
-                    else
-                        badExit "69" "Adding season rating key [${seasonRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the show's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE RATING_KEY = '${fileRatingKeyTmp}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM video_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"; then
-                            printOutput "5" "Removed stale rating key [${fileRatingKeyTmp}] from video_rating_key_by_item"
-                        else
-                            badExit "70" "Failed to remove stale rating key [${fileRatingKeyTmp}] from video_rating_key_by_item -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM video_rating_key_by_item WHERE ID = ${firstEpisodeId};"; then
-                            printOutput "5" "Removed stale rating keys containing file ID [${firstEpisodeId}] from video_rating_key_by_item"
-                        else
-                            badExit "71" "Failed to remove stale rating keys containing file ID [${firstEpisodeId}] from video_rating_key_by_season -- Possible database corruption"
-                        fi
-                    else
-                        badExit "72" "Database count for item episode key [${fileRatingKeyTmp}] in video_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO video_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                        printOutput "5" "Added show rating key [${fileRatingKeyTmp}] to database"
-                    else
-                        badExit "73" "Adding show rating key [${fileRatingKeyTmp}] to database failed"
-                    fi
-                    
-                    # Break the loop
-                    break
-                fi
-            fi
-        done
-    fi
-
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        printOutput "1" "Unable to locate rating key for series [${chanName}]"
-        return 1
-    fi
-fi
-if [[ -z "${videoFileRatingKey[_${1}]}" ]]; then
-    printOutput "1" "Rating key lookup for file ID [${1}] failed -- Is Plex aware of the file? If so, repair rating keys with the '-r' flag."
-    return 1
-fi
-}
-
-function getAudioFileRatingKey {
-# File ID should be passed as ${1}
-if [[ -z "${1}" ]]; then
-    printOutput "1" "Pass me a file ID please [3]"
-    return 1
-fi
-if [[ -n "${audioFileRatingKey[_${1}]}" ]]; then
-    # We already have it
-    # Validate it
-    if [[ -z "${audioFileRatingKey[_${1}]}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${audioFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${audioFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${audioFileRatingKey[_${1}]}] failed to validate as an interger"
-        return 1
-    else
-        badExit "74" "Impossible condition"
-    fi
-    callCurl "${plexAdd}/library/metadata/${audioFileRatingKey[_${1}]}?X-Plex-Token=${plexToken}"
-    verifyId="$(yq -p xml ".MediaContainer.Track.Media.Part.\"+@file\"" <<<"${curlOutput}")"
-    verifyId="${verifyId%\]\.*}"
-    verifyId="${verifyId##*\[}"
-    if [[ "${verifyId}" == "${1}" ]]; then
-        # We're good
-        return 0
-    fi
-else
-    audioFileRatingKey["_${1}"]="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_item WHERE ID = '${1}';")"
-    if [[ -n "${audioFileRatingKey[_${1}]}" ]]; then
-        # Validate it
-        if [[ -z "${audioFileRatingKey[_${1}]}" ]]; then
-            printOutput "1" "No data provided to validate interger"
-            return 1
-        elif [[ "${audioFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-            # Expected outcome
-            true
-        elif ! [[ "${audioFileRatingKey[_${1}]}" =~ ^[0-9]+$ ]]; then
-            printOutput "1" "Data [${audioFileRatingKey[_${1}]}] failed to validate as an interger"
-            return 1
-        else
-            badExit "75" "Impossible condition"
-        fi
-
-        callCurl "${plexAdd}/library/metadata/${audioFileRatingKey[_${1}]}?X-Plex-Token=${plexToken}"
-        verifyId="$(yq -p xml ".MediaContainer.Track.Media.Part.\"+@file\"" <<<"${curlOutput}")"
-        verifyId="${verifyId%\]\.*}"
-        verifyId="${verifyId##*\[}"
-        if [[ "${verifyId}" == "${1}" ]]; then
-            # We're good
-            return 0
-        fi
-    fi
-fi
-
-# Get the channel ID of our file ID
-local channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${1}';")"
-if [[ -z "${channelId}" ]]; then
-    printOutput "1" "Unable to retrieve channel ID for file ID [${1}] -- Possible database corruption"
-    return 1
-fi
-# Get the rating key for this artist
-local showRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${channelId}';")"
-if [[ -z "${showRatingKey}" ]]; then
-    updateArtistRatingKey "${channelId}"
-    local showRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${channelId}';")"
-    if [[ -z "${showRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve artist rating key for channel ID [${channelId}]"
-        return 1
-    fi
-fi
-# Get the rating key for the album
-local vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${1}';")"
-if [[ -z "${vidYear}" ]]; then
-    printOutput "1" "Unable to retrieve year for file ID [${1}] -- Possible database corruption"
-    return 1
-fi
-local albumRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_album WHERE ID = '${1}' AND YEAR = ${vidYear};")"
-if [[ -z "${albumRatingKey}" ]]; then
-    updateAlbumRatingKey "${1}" "${vidYear}" "${showRatingKey}"
-    local albumRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_album WHERE ID = '${1}' AND YEAR = ${vidYear};")"
-    if [[ -z "${albumRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve artist rating key for ID [${1}] year [${vidYear}]"
-        return 1
-    fi
-fi
-# Get the rating key for the file ID
-callCurl "${plexAdd}/library/metadata/${albumRatingKey}/children/?X-Plex-Token=${plexToken}"
-readarray -t fileRatingKeys < <(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-for fileRatingKeyTmp in "${fileRatingKeys[@]}"; do
-    # Validate it
-    if [[ -z "${fileRatingKeyTmp}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${fileRatingKeyTmp}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${fileRatingKeyTmp}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${fileRatingKeyTmp}] failed to validate as an interger"
-        return 1
-    else
-        badExit "76" "Impossible condition"
-    fi
-    local fileId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"10107\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-    local fileId="${fileId%\]\.*}"
-    local fileId="${fileId##*\[}"
-    if [[ "${fileId}" == "${1}" ]]; then
-        # We've matched
-        audioFileRatingKey["_${1}"]="${fileRatingKeyTmp}"
-        # Load it into the database
-        local dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};")"
-        if [[ "${dbCount}" -eq "1" ]]; then
-            # Drop that outdated record
-            sqDb "DELETE FROM audio_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"
-        elif [[ "${dbCount}" -gt "1" ]]; then
-            printOutput "1" "Received count [${dbCount}] from database -- Possibly corrupted"
-            sqDb "DELETE FROM audio_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"
-        else
-            badExit "77" "Received unexpected count [${dbCount}] from database for fileRatingKeyTmp [${fileRatingKeyTmp}] -- Database possibly corrupted"
-        fi
-        # Now we can insert
-        if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES (${fileRatingKeyTmp}, '${1}', $(date +%s));"; then
-            printOutput "5" "Added item rating key [${fileRatingKeyTmp}] year [${2}] to database"
-        else
-            badExit "78" "Adding item rating key [${fileRatingKeyTmp}] year [${2}] to database failed"
-        fi
-        break
-    fi
-done
-}
-
-function updateAlbumRatingKey {
-# Channel ID is ${1}
-# Season year is ${2}
-# Show rating key is ${3}
-callCurl "${plexAdd}/library/metadata/${3}/children/?X-Plex-Token=${plexToken}"
-local albumRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${2}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-
-# Validate it
-if [[ -z "${albumRatingKey}" ]]; then
-    printOutput "1" "No data provided to validate interger"
-    return 1
-elif [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    true
-elif ! [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${albumRatingKey}] failed to validate as an interger"
-    return 1
-else
-    badExit "79" "Impossible condition"
-fi
-
-# Add it to the database
-local dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE RATING_KEY = ${albumRatingKey};")"
-if [[ "${dbCount}" -eq "0" ]]; then
-    # Expected output
-    true
-elif [[ "${dbCount}" -eq "1" ]]; then
-    # Drop the stale rating key
-    if ! sqDb "DELETE FROM audio_rating_key_by_album WHERE RATING_KEY = ${albumRatingKey};"; then
-        badExit "80" "Failed to remove stale album rating key [${albumRatingKey}] from audio_rating_key_by_album -- Database likely corrupt"
-    fi
-else
-    badExit "81" "Database count for rating key [${albumRatingKey}] in audio_rating_key_by_album table returned unexpected output [${dbCount}] -- Possible database corruption"
-fi
-
-# Insert
-if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, CHANNEL_ID, YEAR, UPDATED) VALUES (${albumRatingKey}, '${1}', ${2}, $(date +%s));"; then
-    printOutput "5" "Added album rating key [${albumRatingKey}] year [${2}] to database"
-else
-    badExit "82" "Adding album rating key [${albumRatingKey}] year [${2}] to database failed"
-fi
-}
-
-function updateArtistRatingKey {
-# Channel ID should be passed as ${1}
-if [[ -z "${1}" ]]; then
-    badExit "83" "No channel ID passed for show rating key update"
-fi
-chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1}';")"
-printOutput "3" "Retrieving rating key from Plex for show [${chanName}] with channel ID [${1}]"
-# Can we take the easy way out? Try to match the artist by name
-lookupMatch="0"
-# Get a list of all the artist in the audio library
-callCurl "${plexAdd}/library/sections/${audioLibraryId}/all?X-Plex-Token=${plexToken}"
-# See if we can flatly match any of these via ${chanName}
-showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${chanName}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-if [[ -n "${showRatingKey}" ]]; then
-    # We could!
-    printOutput "5" "Located show rating key [${showRatingKey}] via most efficient lookup method"
-    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${1}';")"
-    if [[ "${dbCount}" -eq "0" ]]; then
-        # Expected output
-        true
-    elif [[ "${dbCount}" -eq "1" ]]; then
-        # Drop the stale rating key
-        if ! sqDb "DELETE FROM audio_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-            badExit "84" "Failed to remove stale artist rating key [${showRatingKey}] from audio_rating_key_by_channel -- Database likely corrupt"
-        fi
-    else
-        badExit "85" "Database count for artist rating key [${showRatingKey}] in audio_rating_key_by_channel table returned unexpected output [${dbCount}] -- Possible database corruption"
-    fi
-    if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-        printOutput "5" "Added show rating key [${showRatingKey}] to database"
-    else
-        badExit "86" "Adding show rating key [${showRatingKey}] to database failed"
-    fi
-    lookupMatch="1"
-else
-    # We could not
-    # Best way would be the first episode of the first album of the channel ID in question
-    firstEpisode="$(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${1}' ORDER BY TIMESTAMP ASC LIMIT 1;")"
-    # Having the year would help as we can skip artist which do not have the first year album we want
-    firstYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${firstEpisode}';")"
-    # To do this, we need to find a matching episode by YT ID in Plex
-    # The "lazy" way to do this is to only compare items which have the same first character as our channel name
-    chanNameCompare="${chanName:0:1}"
-    # Don't recycle old variable data
-    unset plexTitleArr notSearchedArr
-    # Extract a list of item titles from Plex, to an array
-    readarray -t plexTitleArr <<<"$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@title\"" <<<"${curlOutput}")"
-    for z in "${!plexTitleArr[@]}"; do
-        # Get the first letter
-        plexNameCompare="${plexTitleArr[${z}]:0:1}"
-        # Compare it to the first letter of our artist
-        if [[ "${plexNameCompare^}" == "${chanNameCompare^}" ]]; then
-            # The first characters match, get show's rating key so we can investigate further
-            showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            # Validate it
-            if [[ -z "${showRatingKey}" ]]; then
-                printOutput "1" "No data provided to validate interger"
-                return 1
-            elif [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-                # Expected outcome
-                true
-            elif ! [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Data [${showRatingKey}] failed to validate as an interger"
-                return 1
-            else
-                badExit "87" "Impossible condition"
-            fi
-            # Get the rating key of a album that matches our audio year
-            callCurl "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
-            albumRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            # Validate it
-            if [[ -z "${albumRatingKey}" ]]; then
-                printOutput "1" "No data provided to validate interger"
-                return 1
-            elif [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
-                # Expected outcome
-                true
-            elif ! [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Data [${albumRatingKey}] failed to validate as an interger"
-                return 1
-            else
-                badExit "88" "Impossible condition"
-            fi
-            if [[ -n "${albumRatingKey}" ]]; then
-                callCurl "${plexAdd}/library/metadata/${albumRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first album
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                if [[ -z "${firstEpisodeId}" ]]; then
-                    printOutput "1" "Failed to isolite ID for first episode of [${plexTitleArr[${z}]}] album [${firstYear}] -- Skipping artist lookup"
-                    continue
-                fi
-                # We have now extracted the ID of the first episode of the first album. Compare it to ours, and hope for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    # We've matched!
-                    lookupMatch="1"
-                    printOutput "5" "Located show rating key [${showRatingKey}] via semi-efficient lookup method"
-                    # While we're already here, grab the rating key for the individual episode/file
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    audioFileRatingKey["_${firstEpisodeId}"]="${fileRatingKeyTmp}"
-
-                    # Add the show rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE RATING_KEY = '${showRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${showRatingKey}] from audio_rating_key_by_channel"
-                        else
-                            badExit "89" "Failed to remove stale rating key [${showRatingKey}] from audio_rating_key_by_channel -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_channel WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from audio_rating_key_by_channel"
-                        else
-                            badExit "90" "Failed to remove stale rating keys containing channel ID [${1}] from audio_rating_key_by_channel -- Possible database corruption"
-                        fi
-                    else
-                        badExit "91" "Database count for rating key [${showRatingKey}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added artist rating key [${showRatingKey}] to database"
-                    else
-                        badExit "92" "Adding artist rating key [${showRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the album rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE RATING_KEY = '${albumRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_album WHERE RATING_KEY = ${albumRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${albumRatingKey}] from audio_rating_key_by_album"
-                        else
-                            badExit "93" "Failed to remove stale rating key [${albumRatingKey}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_album WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from audio_rating_key_by_album"
-                        else
-                            badExit "94" "Failed to remove stale rating keys containing channel ID [${1}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                    else
-                        badExit "95" "Database count for rating key [${albumRatingKey}] in audio_rating_key_by_album table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES (${albumRatingKey}, ${vidYear}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added album rating key [${albumRatingKey}] to database"
-                    else
-                        badExit "96" "Adding album rating key [${albumRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the show's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE RATING_KEY = '${fileRatingKeyTmp}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"; then
-                            printOutput "5" "Removed stale rating key [${fileRatingKeyTmp}] from audio_rating_key_by_item"
-                        else
-                            badExit "97" "Failed to remove stale rating key [${fileRatingKeyTmp}] from audio_rating_key_by_item -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_item WHERE ID = ${firstEpisodeId};"; then
-                            printOutput "5" "Removed stale rating keys containing file ID [${firstEpisodeId}] from audio_rating_key_by_item"
-                        else
-                            badExit "98" "Failed to remove stale rating keys containing file ID [${firstEpisodeId}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                    else
-                        badExit "99" "Database count for item episode key [${fileRatingKeyTmp}] in audio_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                        printOutput "5" "Added show rating key [${fileRatingKeyTmp}] to database"
-                    else
-                        badExit "100" "Adding show rating key [${fileRatingKeyTmp}] to database failed"
-                    fi
-
-                    # Break the loop
-                    break
-                fi
-            fi
-        else
-            notSearchedArr+=("${z}")
-        fi
-    done
-
-    # If we've gotten this far, and not matched anything, we should do an inefficient search with the leftover titles from the notSearchedArr[@]
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        # We may have some unwanted data from some other lookup for ${curlOutput}, so call that endpoint again
-        callCurl "${plexAdd}/library/sections/${audioLibraryId}/all?X-Plex-Token=${plexToken}"
-        for z in "${notSearchedArr[@]}"; do
-            showRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select( .\"+@title\" == \"${plexTitleArr[${z}]}\") | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${showRatingKey}" ]]; then
-                printOutput "5" "Attempting lookup with show rating key [${showRatingKey}]"
-            else
-                continue
-            fi
-            # Get the rating key of a album that matches our audio year
-            callCurl "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
-            albumRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${albumRatingKey}" ]]; then
-                printOutput "5" "Retrieved album rating key [${albumRatingKey}]"
-                callCurl "${plexAdd}/library/metadata/${albumRatingKey}/children?X-Plex-Token=${plexToken}"
-                # Get the YT ID from the file path of the first episode of the first album
-                firstEpisodeId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                firstEpisodeId="${firstEpisodeId%\]\.*}"
-                firstEpisodeId="${firstEpisodeId##*\[}"
-                # We have now extracted the ID of the first episode of the first album. Compare it to ours, and pray for a match.
-                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
-                    lookupMatch="1"
-                    printOutput "5" "Located show rating key [${showRatingKey}] via least efficient lookup method"
-                    fileRatingKeyTmp="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                    audioFileRatingKey["_${firstEpisodeId}"]="${fileRatingKeyTmp}"
-
-                    # Add the show rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE RATING_KEY = '${showRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_channel WHERE RATING_KEY = ${showRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${showRatingKey}] from audio_rating_key_by_channel"
-                        else
-                            badExit "101" "Failed to remove stale rating key [${showRatingKey}] from audio_rating_key_by_channel -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_channel WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from audio_rating_key_by_channel"
-                        else
-                            badExit "102" "Failed to remove stale rating keys containing channel ID [${1}] from audio_rating_key_by_channel -- Possible database corruption"
-                        fi
-                    else
-                        badExit "103" "Database count for rating key [${showRatingKey}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES (${showRatingKey}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added artist rating key [${showRatingKey}] to database"
-                    else
-                        badExit "104" "Adding artist rating key [${showRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the album rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE RATING_KEY = '${albumRatingKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_album WHERE RATING_KEY = ${albumRatingKey};"; then
-                            printOutput "5" "Removed stale rating key [${albumRatingKey}] from audio_rating_key_by_album"
-                        else
-                            badExit "105" "Failed to remove stale rating key [${albumRatingKey}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_album WHERE CHANNEL_ID = ${1};"; then
-                            printOutput "5" "Removed stale rating keys containing channel ID [${1}] from audio_rating_key_by_album"
-                        else
-                            badExit "106" "Failed to remove stale rating keys containing channel ID [${1}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                    else
-                        badExit "107" "Database count for rating key [${albumRatingKey}] in audio_rating_key_by_album table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES (${albumRatingKey}, ${vidYear}, '${1}', $(date +%s));"; then
-                        printOutput "5" "Added album rating key [${albumRatingKey}] to database"
-                    else
-                        badExit "108" "Adding album rating key [${albumRatingKey}] to database failed"
-                    fi
-                    
-                    # Add the show's episode rating key to the database
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE RATING_KEY = '${fileRatingKeyTmp}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # Expected output
-                        true
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, delete the stale entry
-                        if sqDb "DELETE FROM audio_rating_key_by_item WHERE RATING_KEY = ${fileRatingKeyTmp};"; then
-                            printOutput "5" "Removed stale rating key [${fileRatingKeyTmp}] from audio_rating_key_by_item"
-                        else
-                            badExit "109" "Failed to remove stale rating key [${fileRatingKeyTmp}] from audio_rating_key_by_item -- Possible database corruption"
-                        fi
-                        if sqDb "DELETE FROM audio_rating_key_by_item WHERE ID = ${firstEpisodeId};"; then
-                            printOutput "5" "Removed stale rating keys containing file ID [${firstEpisodeId}] from audio_rating_key_by_item"
-                        else
-                            badExit "110" "Failed to remove stale rating keys containing file ID [${firstEpisodeId}] from audio_rating_key_by_album -- Possible database corruption"
-                        fi
-                    else
-                        badExit "111" "Database count for item episode key [${fileRatingKeyTmp}] in audio_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                    fi
-                    # Insert
-                    if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${fileRatingKeyTmp}', '${firstEpisodeId}', $(date +%s));"; then
-                        printOutput "5" "Added show rating key [${fileRatingKeyTmp}] to database"
-                    else
-                        badExit "112" "Adding show rating key [${fileRatingKeyTmp}] to database failed"
-                    fi
-                    
-                    # Break the loop
-                    break
-                fi
-            fi
-        done
-    fi
-
-    if [[ "${lookupMatch}" -eq "0" ]]; then
-        printOutput "1" "Unable to locate rating key for artist [${chanName}]"
-        return 1
-    fi
-fi
-if [[ -z "${audioFileRatingKey[_${1}]}" ]]; then
-    printOutput "1" "Rating key lookup for file ID [${1}] failed -- Is Plex aware of the file? If so, repair rating keys with the '-r' flag."
-    return 1
-fi
-}
-### END UNTESTED
-
-function getChannelInfo {
-# It does not, we should add it.
-# Get the channel info from the YouTube API
-printOutput "5" "Calling API for channel info [${1}]"
-ytApiCall "channels?id=${1}&part=snippet,statistics,brandingSettings"
-apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
-
-# Validate it
-if [[ -z "${apiResults}" ]]; then
-    printOutput "1" "No data provided to validate interger"
-    return 1
-elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    true
-elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${apiResults}] failed to validate as an interger"
-    return 1
-else
-    badExit "113" "Impossible condition"
-fi
-
-if [[ "${apiResults}" -eq "0" ]]; then
-    printOutput "1" "API lookup for channel info returned zero results -- Skipping"
-    return 1
-fi
-
-# Get the channel name
-chanName="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
-# Validate it
-if [[ -z "${chanName}" ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "No channel title returned from API lookup for channel ID [${1}] -- Skipping"
-    return 1
-fi
-# Store the channel name for our directory name
-channelNameClean="${chanName}"
-# Store the channel name for stdout
-chanNameOrig="${chanName}"
-# Clean the name up for sqlite
-chanName="${chanName//\'/\'\'}"
-
-# Get the channel creation date
-chanDate="$(yq -p json ".items[0].snippet.publishedAt" <<<"${curlOutput}")"
-# Convert the date to a Unix timestamp
-chanEpochDate="$(date --date="${chanDate}" "+%s")"
-if ! [[ "${chanEpochDate}" =~ ^[0-9]+$ ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Unable to convert creation date to unix epoch timestamp [${chanDate}][${chanEpochDate}] for channel ID [${1}] -- Skipping"
-    return 1
-fi
-
-# Get the channel sub count
-chanSubs="$(yq -p json ".items[0].statistics.subscriberCount" <<<"${curlOutput}")"
-if [[ "${chanSubs}" == "null" ]]; then
-    chanSubs="0"
-elif ! [[ "${chanSubs}" =~ ^[0-9]+$ ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Invalid subscriber count returned [${chanSubs}] for channel ID [${1}] -- Skipping"
-    return 1
-fi
-if [[ "${chanSubs}" -ge "1000" ]]; then
-    chanSubs="$(printf "%'d" "${chanSubs}")"
-fi
-
-# Get the channel country
-chanCountry="$(yq -p json ".items[0].snippet.country" <<<"${curlOutput}")"
-if [[ "${chanCountry}" == "null" ]]; then
-    chanCountry="an unknown country"
-else
-    # Safety check is done within this function
-    if ! getChannelCountry "${chanCountry}"; then
-        ### SKIP CONDITION
-        printOutput "1" "Unknown country code [${chanCountry}] for channel ID [${1}] -- Skipping";
-        return 1
-    fi
-fi
-# Probably unnecessary -- Clean the country up for sqlite
-chanCountry="${chanCountry//\'/\'\'}"
-
-# Get the channel custom URL
-chanUrl="$(yq -p json ".items[0].snippet.customUrl" <<<"${curlOutput}")"
-if ! [[ "${chanUrl}" =~ ^@([A-Z]|[a-z]|[0-9]|\.|-|_)+$ ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Bad custom URL [${chanUrl}] returned for channel ID [${1}] -- Skipping"
-    return 1
-fi
-# Probably unnecessary -- Clean the URL up for sqlite
-chanUrl="${chanUrl//\'/\'\'}"
-
-# Get the channel video count
-chanVids="$(yq -p json ".items[0].statistics.videoCount" <<<"${curlOutput}")"
-if [[ "${chanVids}" == "null" ]]; then
-    chanVids="0"
-elif ! [[ "${chanVids}" =~ ^[0-9]+$ ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Invalid video count returned [${chanVids}] for channel ID [${1}] -- Skipping"
-    return 1
-fi
-if [[ "${chanVids}" -ge "1000" ]]; then
-    chanVids="$(printf "%'d" "${chanVids}")"
-fi
-
-# Get the channel view count
-chanViews="$(yq -p json ".items[0].statistics.viewCount" <<<"${curlOutput}")"
-if [[ "${chanViews}" == "null" ]]; then
-    chanViews="0"
-elif ! [[ "${chanViews}" =~ ^[0-9]+$ ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Invalid view count returned [${chanViews}] for channel ID [${1}] -- Skipping"
-    return 1
-fi
-if [[ "${chanViews}" -ge "1000" ]]; then
-    chanViews="$(printf "%'d" "${chanViews}")"
-fi
-
-# Get the channel description
-chanDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
-if [[ -z "${chanDesc}" || "${chanDesc}" == "null" ]]; then
-    # No channel description set
-    chanDesc="https://www.youtube.com/${chanUrl}${lineBreak}${chanSubs} subscribers${lineBreak}${chanVids} videos${lineBreak}${chanViews} views${lineBreak}Joined YouTube $(date --date="@${chanEpochDate}" "+%b. %d, %Y")${lineBreak}Based in ${chanCountry}${lineBreak}Channel description and statistics last updated $(date)"
-else
-    chanDesc="${chanDesc}${lineBreak}-----${lineBreak}https://www.youtube.com/${chanUrl}${lineBreak}${chanSubs} subscribers${lineBreak}${chanVids} videos${lineBreak}${chanViews} views${lineBreak}Joined YouTube $(date --date="@${chanEpochDate}" "+%b. %d, %Y")${lineBreak}Based in ${chanCountry}${lineBreak}Channel description and statistics last updated $(date)"
-fi
-# Clean the description up for sqlite
-chanDesc="${chanDesc//\'/\'\'}"
-
-# Define our video path and audio path with filesystem safe characters
-# Trim any leading spaces and/or periods
-while [[ "${channelNameClean:0:1}" =~ ^( |\.)$ ]]; do
-    channelNameClean="${channelNameClean# }"
-    channelNameClean="${channelNameClean#\.}"
-done
-# Trim any trailing spaces and/or periods
-while [[ "${channelNameClean:$(( ${#channelNameClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
-    channelNameClean="${channelNameClean% }"
-    channelNameClean="${channelNameClean%\.}"
-done
-# Replace any forward or back slashes \ /
-channelNameClean="${channelNameClean//\//_}"
-channelNameClean="${channelNameClean//\\/_}"
-# Replace any colons :
-channelNameClean="${channelNameClean//:/-}"
-# Replace any stars *
-channelNameClean="${channelNameClean//\*/}"
-# Replace any question marks ?
-channelNameClean="${channelNameClean//\?/}"
-# Replace any quotation marks "
-channelNameClean="${channelNameClean//\"/}"
-# Replace any brackets < >
-channelNameClean="${channelNameClean//</}"
-channelNameClean="${channelNameClean//>/}"
-# Replace any vertical bars |
-channelNameClean="${channelNameClean//\|/}"
-# Condense any instances of '_-_'
-while [[ "${channelNameClean}" =~ .*"_-_".* ]]; do
-    channelNameClean="${channelNameClean//_-_/ - }"
-done
-# Condense any multiple spaces
-while [[ "${channelNameClean}" =~ .*"  ".* ]]; do
-    channelNameClean="${channelNameClean//  / }"
-done
-
-# String the whole path together
-chanPathClean="${channelNameClean} [${1}]"
-
-# Clean the path up for sqlite
-chanPathClean="${chanPathClean//\'/\'\'}"
-# Clean the name up for sqlite
-channelNameClean="${channelNameClean//\'/\'\'}"
-
-# Extract the URL for the channel image, if one exists
-chanImage="$(yq -p json ".items[0].snippet.thumbnails | to_entries | sort_by(.value.height) | reverse | .0 | .value.url" <<<"${curlOutput}")"
-
-# Extract the URL for the channel background, if one exists
-chanBanner="$(yq -p json ".items[0].brandingSettings.image.bannerExternalUrl" <<<"${curlOutput}")"
-# If we have a banner, crop it correctly
-if [[ -n "${chanBanner}" && ! "${chanBanner}" == "null" ]]; then
-    chanBanner="${chanBanner}=w2560-fcrop64=1,00005a57ffffa5a8-k-c0xffffffff-no-nd-rj"
-else
-    unset chanBanner
-fi
-
-dbCount="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${1}';")"
-if [[ "${dbCount}" -eq "0" ]]; then
-    # Insert it into the database
-    if sqDb "INSERT INTO source_channels (ID, NAME, NAME_CLEAN, TIMESTAMP, SUB_COUNT, COUNTRY, URL, VID_COUNT, VIEW_COUNT, DESC, PATH, IMAGE, UPDATED) VALUES ('${1}', '${chanName}', '${channelNameClean}', ${chanEpochDate}, ${chanSubs//,/}, '${chanCountry}', 'https://www.youtube.com/${chanUrl}', ${chanVids//,/}, ${chanViews//,/}, '${chanDesc}', '${chanPathClean}', '${chanImage}', $(date +%s));"; then
-        printOutput "3" "Added channel [${chanNameOrig}] ID [${1}] to database"
-    else
-        badExit "114" "Adding channel [${chanNameOrig}] ID [${1}] to database failed"
-    fi
-elif [[ "${dbCount}" -eq "1" ]]; then
-    # Update the database entry
-    if sqDb "UPDATE source_channels SET NAME = '${chanName}', NAME_CLEAN = '${channelNameClean}', TIMESTAMP = ${chanEpochDate}, SUB_COUNT = ${chanSubs//,/}, COUNTRY = '${chanCountry}', URL = 'https://www.youtube.com/${chanUrl}', VID_COUNT = ${chanVids//,/}, VIEW_COUNT = ${chanVids//,/}, DESC = '${chanDesc}', PATH = '${chanPathClean}', IMAGE = '${chanImage}', UPDATED = $(date +%s) WHERE ID = '${1}';"; then
-        printOutput "4" "Updated channel [${chanNameOrig}] ID [${1}] in database"
-    else
-        badExit "115" "Updating channel [${chanNameOrig}] ID [${1}] in database failed"
-    fi
-else
-    # PANIC
-    badExit "116" "Multiple matches found for channel ID [${1}] -- Possible database corruption"
-fi
-
-# If we have a channel banner, add that entry too
-if [[ -n "${chanBanner}" && ! "${chanBanner}" == "null" ]]; then
-    if sqDb "UPDATE source_channels SET BANNER = '${chanBanner}' WHERE ID = '${1}';"; then
-        printOutput "5" "Appended channel banner to database entry for channel ID [${1}]"
-    else
-        badExit "117" "Unable to append channel banner to database entry for channel ID [${1}]"
-    fi
-fi
-
-# If we're in maintenance mode, update the images
-if [[ "${updateMetadata}" == "1" ]]; then
-    # Get the chanDir path
-    chanDir="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1}';")"
-    # Get the channel image
-    dbReply="$(sqDb "SELECT IMAGE FROM source_channels WHERE ID = '${1}';")"
-    if [[ -n "${dbReply}" ]]; then
-        # We only need to store the image in a shows folder, since music folders require image uploads
-        if [[ -d "${videoOutput}/${chanDir}" ]]; then
-            # Download the show image
-            if callCurlDownload "${dbReply}" "${videoOutputDir}/${chanDir}/show.jpg"; then
-                printOutput "5" "Downloaded show image for [${chanDir}]"
-            else
-                printOutput "1" "Failed to download show image for [${chanDir}]"
-            fi
-            # Get the background image, if one exists
-            dbReply="$(sqDb "SELECT BANNER FROM source_channels WHERE ID = '${1}';")"
-            if [[ -n "${dbReply}" ]]; then
-                # We only need to store the image in a shows folder, since music folders require image uploads
-                if [[ -d "${videoOutput}/${chanDir}" ]]; then
-                    # Download it
-                    callCurlDownload "${dbReply}" "${videoOutputDir}/${chanDir}/background.jpg"
-                fi
-            fi
-            # Replace season folder images
-            while read -r vidYear; do
-                # Back up old ones
-                if [[ -e "${videoOutputDir}/${chanDir}/Season ${vidYear}/Season${vidYear}.jpg" ]]; then
-                    if ! mv "${videoOutputDir}/${chanDir}/Season ${vidYear}/Season${vidYear}.jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/Season${vidYear}.old.jpg"; then
-                        printOutput "1" "Failed to back up old season image for year [${vidYear}]"
-                    fi
-                fi
-                # Make new ones
-                if makeSeasonImage "${chanDir}" "${vidYear}" "${1}"; then
-                    printOutput "5" "Created season image for [${chanDir}/Season ${vidYear}]"
                 else
-                    printOutput "1" "Failed to create season image for [${chanDir}/Season ${vidYear}]"
+                    # It was found
+                    printOutput "5" "SponsorBlock data found for video"
+                    sponsorblockAvailable="Found [$(date)]"
                 fi
-            done < <(sqDb "SELECT DISTINCT YEAR FROM source_videos WHERE CHANNEL_ID = '${1}';")
+            fi
+        else
+            # The video is being imported
+            true
         fi
     fi
 fi
-}
 
-function getPlaylistInfo {
-# Playlist ID should be passed as ${1}
-# Get the necessary information
-ytApiCall "playlists?id=${1}&part=id,snippet"
+# Query the YouTube API for the video info
+printOutput "5" "Calling API for video info [${1}]"
+ytApiCall "videos?id=${1}&part=snippet,liveStreamingDetails"
+# Check to make sure we got a result
 apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
 # Validate it
 if [[ -z "${apiResults}" ]]; then
-    printOutput "1" "No data provided to validate interger"
+    printOutput "1" "No data provided to validate integer"
     return 1
 elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
     # Expected outcome
     true
 elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${apiResults}] failed to validate as an interger"
+    printOutput "1" "Data [${apiResults}] failed to validate as an integer"
     return 1
 else
-    badExit "118" "Impossible condition"
+    badExit "11" "Impossible condition"
 fi
-
 if [[ "${apiResults}" -eq "0" ]]; then
-    printOutput "2" "API lookup for playlist parsing returned zero results (Is the playlist private?)"
-
+    printOutput "2" "API lookup for video zero results (Is the video private?)"
     if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-        printOutput "3" "Re-attempting playlist lookup via yt-dlp + cookie"
-        dlpApiCall="$(yt-dlp --no-warnings -J --playlist-items 0 --cookies "${cookieFile}" "https://www.youtube.com/playlist?list=${1}" 2>/dev/null)"
+        printOutput "3" "Re-attempting video ID lookup via yt-dlp + cookie"
+        dlpApiCall="$(yt-dlp --no-warnings -J --cookies "${cookieFile}" "https://www.youtube.com/watch?v=${1}" 2>/dev/null)"
         #throttleDlp
         
-        if [[ "$(yq -p json ".availability" <<<"${dlpApiCall}")" == "private" ]]; then
-            # Yes, it's a private playlist we can auth via cookie
-            plVis="private"
+        if [[ "$(yq -p json ".id" <<<"${dlpApiCall}")" == "${1}" ]]; then
+            # Yes, it's a private video we can auth via cookie
             printOutput "3" "Lookup via cookie auth successful"
-            plTitle="$(yq -p json ".title" <<<"${dlpApiCall}")"
-            plDesc="$(yq -p json ".description" <<<"${dlpApiCall}")"
-            plImage="$(yq -p json ".thumbnails[0].url" <<<"${dlpApiCall}")"
-            plImage="${plImage%\?*}"
+            # Get the video title
+            vidTitle="$(yq -p json ".title" <<<"${dlpApiCall}")"
+            # Get the video description
+            # Blank if none set
+            vidDesc="$(yq -p json ".description" <<<"${dlpApiCall}")"
+            # Get the channel ID
+            channelId="$(yq -p json ".channel_id" <<<"${dlpApiCall}")"
+            # Get the channel name
+            chanName="$(yq -p json ".channel" <<<"${dlpApiCall}")"
+            ## This is not provided by the yt-dlp payload. It cannot be looked up via the official API without oauth,
+            ## which I do not want to implement for a number of reasons. Instead, I am going to get this via some very
+            ## shameful code. Please do not read the below 2 lines, I am ashamed of them.
+            uploadDate="$(curl -b "${cookieFile}" -skL "https://www.youtube.com/watch?v=${1}")"
+            uploadDate="$(grep -E -o "<meta itemprop=\"datePublished\" content=\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}\">" <<<"${uploadDate}")"
+            ## Ok I'm done, you can read it again.
+            uploadDate="${uploadDate%\">}"
+            uploadDate="${uploadDate##*\"}"
+            # Get the video type
+            vidType="$(yq -p json ".live_status" <<<"${dlpApiCall}")"
+            # We just need this to be a non-null value
+            broadcastStart="dlp"
         else
-            printOutput "1" "Unable to preform lookup on playlist ID [${1}] via yt-dlp -- Skipping"
+            printOutput "1" "Unable to preform lookup on file ID [${1}] via yt-dlp -- Skipping"
             return 1
         fi
     else
-        printOutput "1" "API lookup failed, and no cookie file provided to attempt to lookup playlist ID [${1}] via yt-dlp -- Skipping"
+        printOutput "1" "File ID [${1}] API lookup failed, and no cookie file provided to attempt to yt-dlp lookup -- Skipping"
         return 1
     fi
 elif [[ "${apiResults}" -eq "1" ]]; then
-    plVis="public"
-    plTitle="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
-    plDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
-    plImage="$(yq -p json ".items[0].snippet.thumbnails | to_entries | sort_by(.value.height) | reverse | .0 | .value.url" <<<"${curlOutput}")"
+    # Get the video title
+    vidTitle="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
+    # Get the video description
+    # Blank if none set
+    vidDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
+    # Get the channel ID
+    channelId="$(yq -p json ".items[0].snippet.channelId" <<<"${curlOutput}")"
+    # Get the channel name
+    chanName="$(yq -p json ".items[0].snippet.channelTitle" <<<"${curlOutput}")"
+    # Get the upload date
+    uploadDate="$(yq -p json ".items[0].snippet.publishedAt" <<<"${curlOutput}")"
+    # Get the video type (Check to see if it's a live broadcast)
+    vidType="$(yq -p json ".items[0].snippet.liveBroadcastContent" <<<"${curlOutput}")"
+    # Get the broadcast start time (Will only return value if it's a live broadcast)
+    broadcastStart="$(yq -p json ".items[0].liveStreamingDetails.actualStartTime" <<<"${curlOutput}")"
 else
-    badExit "119" "Impossible condition"
+    badExit "12" "Impossible condition"
 fi
 
-if [[ -z "${plTitle}" ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Unable to find title for playlist [${1}]"
-    return 1
-else
-    # Clean up the title for sqlite
-    plTitle="${plTitle//\'/\'\'}"
-fi
-if [[ -z "${plImage}" ]]; then
-    ### SKIP CONDITION
-    printOutput "1" "Unable to find image for playlist [${1}]"
-    return 1
-else
-    # Clean up the image for sqlite
-    plImage="${plImage//\'/\'\'}"
-fi
+# Now that we have the channel name, let's do a quick comparison to validate that it hasn't changed
+verifyChannelName "${channelId}" "${chanName}"
 
-dbCount="$(sqDb "SELECT COUNT(1) FROM source_playlists WHERE ID = '${1}';")"
-if [[ "${dbCount}" -eq "0" ]]; then
-    # Doesn't exist, add it.
-    if sqDb "INSERT INTO source_playlists (ID, VISIBILITY, TITLE, IMAGE, UPDATED) VALUES ('${1}', '${plVis}', '${plTitle}', '${plImage}', $(date +%s));"; then
-        printOutput "3" "Added playlist [${plTitle}] to database"
-    else
-        badExit "120" "Adding playlist [${plTitle}] ID [${1}][Vis: ${plVis}] to database failed"
-    fi
-elif [[ "${dbCount}" -eq "1" ]]; then
-    # Exists, update it
-    if sqDb "UPDATE source_playlists SET VISIBILITY = '${plVis}', TITLE = '${plTitle}', IMAGE = '${plImage}', UPDATED = $(date +%s) WHERE ID = '${1}';"; then
-        printOutput "3" "Updated playlist [${plTitle}] in database"
-    else
-        badExit "121" "Updating channel [${plTitle}] ID [${1}] in database failed"
-    fi
-else
-    # Panic
-    badExit "122" "Multiple items returned for playlist [${plTitle}] ID [${1}] -- Possible database corruption"
-fi
-
-if [[ -n "${plDesc}" ]]; then
-    # Clean up the description for sqlite
-    plDesc="${plDesc//\'/\'\'}"
-    if sqDb "UPDATE source_playlists SET DESC = '${plDesc}', UPDATED = $(date +%s) WHERE ID = '${1}';"; then
-        printOutput "3" "Updated description for playlist [${plTitle}] in database"
-    else
-        badExit "123" "Updating description for playlist [${plTitle}] in database failed"
-    fi
-fi
-}
-
-function setSeriesMetadata {
-# Get the channel ID from the rating key
-channelId="$(sqDb "SELECT CHANNEL_ID FROM video_rating_key_by_channel WHERE RATING_KEY = ${1};")"
-
-# Get the channel name
-showName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -z "${showName}" ]]; then
-    printOutput "1" "Unable to retrieve series name for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+# Get the video title
+if [[ -z "${vidTitle}" ]]; then
+    printOutput "1" "Video title returned blank result [${vidTitle}]"
     return 1
 fi
-# Encode it
-showNameEncoded="$(rawurlencode "${showName}")"
-if [[ -z "${showNameEncoded}" ]]; then
-    printOutput "1" "Unable to encode series name [${showName}] for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+printOutput "5" "Video title [${vidTitle}]"
+
+# Get the clean video title
+vidTitleClean="${vidTitle}"
+# Trim any leading spaces and/or periods
+while [[ "${vidTitleClean:0:1}" =~ ^( |\.)$ ]]; do
+    vidTitleClean="${vidTitleClean# }"
+    vidTitleClean="${vidTitleClean#\.}"
+done
+# Trim any trailing spaces and/or periods
+while [[ "${vidTitleClean:$(( ${#vidTitleClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
+    vidTitleClean="${vidTitleClean% }"
+    vidTitleClean="${vidTitleClean%\.}"
+done
+# Replace any forward or back slashes \ /
+vidTitleClean="${vidTitleClean//\//_}"
+vidTitleClean="${vidTitleClean//\\/_}"
+# Replace any colons :
+vidTitleClean="${vidTitleClean//:/}"
+# Replace any stars *
+vidTitleClean="${vidTitleClean//\*/}"
+# Replace any question marks ?
+vidTitleClean="${vidTitleClean//\?/}"
+# Replace any quotation marks "
+vidTitleClean="${vidTitleClean//\"/}"
+# Replace any brackets < >
+vidTitleClean="${vidTitleClean//</}"
+vidTitleClean="${vidTitleClean//>/}"
+# Replace any vertical bars |
+vidTitleClean="${vidTitleClean//\|/}"
+# Condense any instances of '_-_'
+while [[ "${vidTitleClean}" =~ .*"_-_".* ]]; do
+    vidTitleClean="${vidTitleClean//_-_/ - }"
+done
+# Condense any multiple spaces
+while [[ "${vidTitleClean}" =~ .*"  ".* ]]; do
+    vidTitleClean="${vidTitleClean//  / }"
+done
+if [[ -z "${vidTitleClean}" ]]; then
+    printOutput "1" "Clean video title returned blank result [${vidTitle}]"
     return 1
 fi
-
-# Get and encode the channel description
-showDesc="$(sqDb "SELECT DESC FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -z "${showDesc}" ]]; then
-    printOutput "1" "Unable to retrieve series description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-# Encode it
-showDescEncoded="$(rawurlencode "${showDesc}")"
-if [[ -z "${showDescEncoded}" ]]; then
-    printOutput "1" "Unable to encode series description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-
-# Get the channel creation date
-showCreation="$(sqDb "SELECT TIMESTAMP FROM source_channels WHERE ID = '${channelId}';")"
-# Validate it
-if [[ -z "${showCreation}" ]]; then
-    printOutput "1" "No data provided to validate interger"
-    return 1
-elif [[ "${showCreation}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    true
-elif ! [[ "${showCreation}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${showCreation}] failed to validate as an interger"
-    return 1
-else
-    badExit "124" "Impossible condition"
-fi
-# Convert it to YYYY-MM-DD
-showCreation="$(date --date="@${showCreation}" "+%Y-%m-%d")"
-
-if callCurlPut "${plexAdd}/library/sections/${videoLibraryId}/all?type=2&id=${1}&includeExternalMedia=1&title.value=${showNameEncoded}&titleSort.value=${showNameEncoded}&summary.value=${showDescEncoded}&studio.value=YouTube&originallyAvailableAt.value=${showCreation}&title.locked=1&titleSort.locked=1&originallyAvailableAt.locked=1&studio.locked=1&summary.locked=1&X-Plex-Token=${plexToken}"; then
-    printOutput "4" "Metadata for series [${showName}] sucessfully updated"
-else
-    printOutput "1" "Metadata for series [${showName}] failed"
-fi
-}
-
-function setArtistMetadata {
-# Get the channel ID from the rating key
-channelId="$(sqDb "SELECT CHANNEL_ID FROM audio_rating_key_by_channel WHERE RATING_KEY = ${1};")"
-
-# Get the channel name
-showName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -z "${showName}" ]]; then
-    printOutput "1" "Unable to retrieve artist name for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-# Encode it
-showNameEncoded="$(rawurlencode "${showName}")"
-if [[ -z "${showNameEncoded}" ]]; then
-    printOutput "1" "Unable to encode artist name [${showName}] for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-
-# Get and encode the channel description
-showDesc="$(sqDb "SELECT DESC FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -z "${showDesc}" ]]; then
-    printOutput "1" "Unable to retrieve artist description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-# Encode it
-showDescEncoded="$(rawurlencode "${showDesc}")"
-if [[ -z "${showDescEncoded}" ]]; then
-    printOutput "1" "Unable to encode artist description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
-    return 1
-fi
-
-# Update the metadata
-if callCurlPut "${plexAdd}/library/sections/${audioLibraryId}/all?type=8&id=${1}&includeExternalMedia=1&titleSort.value=${showNameEncoded}&summary.value=${showDescEncoded}&title.locked=1&titleSort.locked=1&summary.locked=1&X-Plex-Token=${plexToken}"; then
-    printOutput "4" "Metadata for artist [${showName}] sucessfully updated"
-else
-    printOutput "1" "Metadata for artist [${showName}] failed"
-fi
-
-# Download the artist image to their directory
-chanDir="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId}';")"
-dbReply="$(sqDb "SELECT IMAGE FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -n "${dbReply}" ]]; then
-    # If the video directory exists, download it
-    if [[ -d "${audioOutputDir}/${chanDir}" ]]; then
-        callCurlDownload "${dbReply}" "${audioOutputDir}/${chanDir}/artist.jpg"
-    fi
-fi
-# Get the background image, if one exists
-dbReply="$(sqDb "SELECT BANNER FROM source_channels WHERE ID = '${channelId}';")"
-if [[ -n "${dbReply}" ]]; then
-    # If the video directory exists, download it
-    if [[ -d "${audioOutputDir}/${chanDir}" ]]; then
-        callCurlDownload "${dbReply}" "${audioOutputDir}/${chanDir}/background.jpg"
-    fi
-fi
-
-# Set the artist image, since this can't be done simply by folder
-if callCurlPost "${plexAdd}/library/metadata/${1}/posters?X-Plex-Token=${plexToken}" --data-binary "@${audioOutputDir}/${chanDir}/artist.jpg"; then
-    printOutput "4" "Artist image for [${showName}] successfully updated"
-else
-    printOutput "1" "Artist image for [${showName}] update failed"
-fi
-
-# Set the background image, since this can't be done simply by folder
-if [[ -e "${audioOutputDir}/${chanDir}/background.jpg" ]]; then
-    if callCurlPost "${plexAdd}/library/metadata/${1}/arts?X-Plex-Token=${plexToken}" --data-binary "@${audioOutputDir}/${chanDir}/background.jpg"; then
-        printOutput "4" "Background image for [${showName}] successfully updated"
-    else
-        printOutput "1" "Background image for [${showName}] update failed"
-    fi
-fi
-}
-
-function setAlbumMetadata {
-# The album's rating key should be passed as positional parameter #1
-# Get the file ID from the rating key
-ytId="$(sqDb "SELECT ID FROM audio_rating_key_by_album WHERE RATING_KEY = '${1}';")"
+printOutput "5" "Clean video title [${vidTitleClean}]"
 
 # Get the channel ID
-artistChanId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId}';")"
-
-# Get the album title -- ${albumName}
-albumName="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${ytId}';")"
-if [[ -z "${albumName}" ]]; then
-    printOutput "1" "Unable to retrieve album name for file ID [${ytId}] -- Possible database corruption"
+if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
+    printOutput "1" "Unable to validate channel ID [${channelId}]"
     return 1
 fi
-# Encode it -- ${albumNameEncoded}
-albumNameEncoded="$(rawurlencode "${albumName}")"
+printOutput "5" "Channel ID [${channelId}]"
 
-# Get the album artist -- ${artistName}
-artistName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${artistChanId}';")"
-if [[ -z "${artistName}" ]]; then
-    printOutput "1" "Unable to retrieve artist name for file ID [${ytId}] -- Possible database corruption"
+# Get the upload timestamp
+if [[ -z "${uploadDate}" ]]; then
+    printOutput "1" "Upload date lookup failed for video [${1}]"
     return 1
 fi
-# Encode it -- ${artistNameEncoded}
-artistNameEncoded="$(rawurlencode "${artistName}")"
-
-# Get the originally available date YYYY-MM-DD -- ${albumCreation}
-albumCreation="$(sqDb "SELECT TIMESTAMP FROM source_videos WHERE ID = '${ytId}';")"
-# Validate it
-if [[ -z "${albumCreation}" ]]; then
-    printOutput "1" "No data provided to validate interger"
+# Convert the date to a Unix timestamp
+uploadEpoch="$(date --date="${uploadDate}" "+%s")"
+if ! [[ "${uploadEpoch}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Unable to convert upload date [${uploadDate}] to unix epoch timestamp [${uploadEpoch}]"
     return 1
-elif [[ "${albumCreation}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
+fi
+printOutput "5" "Upload timestamp [${uploadEpoch}]"
+
+# Get the upload year
+uploadYear="${uploadDate:0:4}"
+if ! [[ "${uploadYear}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Unable to extrapolate upload year [${uploadYear}] from upload date [${uploadDate}]"
+    return 1
+fi
+printOutput "5" "Upload year [${uploadYear}]"
+
+# Get the episode index number
+# Update this after it's been added to the database (skip for now)
+
+# Get the video description
+if [[ "${vidDesc}" == " " ]]; then
+    unset vidDesc
+fi
+if [[ -z "${vidDesc}" ]]; then
+    printOutput "5" "No video description"
+else
+    printOutput "5" "Video description present [${#vidDesc} characters]"
+fi
+
+# Get the video type (Regular / Short / Live)
+if [[ -z "${vidType}" ]]; then
+    printOutput "1" "Video type lookup returned blank result [${vidType}]"
+    return 1
+elif [[ "${vidType}" == "none" || "${vidType}" == "not_live" || "${vidType}" == "was_live" ]]; then
+    # Not currently live
+    # Check to see if it's a previous broadcast
+    if [[ -z "${broadcastStart}" ]]; then
+        # This should not be blank, it should be 'null' or a date/time
+        printOutput "1" "Broadcast start time lookup returned blank result [${broadcastStart}] -- Skipping"
+        return 1
+    elif [[ "${broadcastStart}" == "null" || "${vidType}" == "not_live" ]]; then
+        # It doesn't have one. Must be a short, or a regular video.
+        # Use our bullshit to find out
+        httpCode="$(curl -m 15 -s -I -o /dev/null -w "%{http_code}" "https://www.youtube.com/shorts/${1}")"
+        if [[ "${httpCode}" == "000" ]]; then
+            # We're being throttled
+            printOutput "2" "Throttling detected"
+            randomSleep "5" "15"
+            httpCode="$(curl -m 15 -s -I -o /dev/null -w "%{http_code}" "https://www.youtube.com/shorts/${1}")"
+        fi
+        if [[ -z "${httpCode}" ]]; then
+            printOutput "1" "Curl lookup to determine video type returned blank result [${httpCode}] -- Skipping"
+            return 1
+        elif [[ "${httpCode}" == "200" ]]; then
+            # It's a short
+            printOutput "4" "Determined video to be a short"
+            vidType="short"
+        elif [[ "${httpCode}" == "303" ]]; then
+            # It's a regular video
+            printOutput "4" "Determined video to be a standard video"
+            vidType="normal"
+        elif [[ "${httpCode}" == "404" ]]; then
+            # No such video exists
+            printOutput "1" "Curl lookup returned HTTP code 404 for file ID [${1}] -- Skipping"
+            return 1
+        else
+            printOutput "1" "Curl lookup to determine file ID [${1}] type returned unexpected result [${httpCode}] -- Skipping"
+            return 1
+        fi
+    elif [[ "${broadcastStart}" =~ ^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$ || "${vidType}" == "was_live" ]]; then
+        printOutput "4" "Determined video to be a past live broadcast"
+        vidType="waslive"
+    else
+        printOutput "Broadcast start time lookup returned unexpected result [${broadcastStart}] -- Skipping"
+        return 1
+    fi
+elif [[ "${vidType}" == "live" || "${vidType}" == "is_live" ]]; then
+    # Currently live
+    printOutput "2" "File ID [${1}] detected to be a live broadcast"
+    vidType="live"
+else
+    printOutput "1" "File ID [${1}] lookup video type returned invalid result [${vidType}] -- Skipping"
+    return 1
+fi
+printOutput "5" "Video type [${vidType}]"
+
+# We have the video format option
+# We have the include shorts option
+# We have the include live option
+# We have the mark watched option
+
+# Determine our status (queued/skipped)
+# In case we're doing this as an update, check and see if it's already logged
+dbCount="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+if [[ "${dbCount}" -eq "0" ]]; then
+    if [[ "${2}" == "import" ]]; then
+        vidStatus="import"
+        # Using the error field as a cheap place to store where we need to move the file from
+        vidError="${3}"
+    else
+        vidStatus="queued"
+        if [[ "${vidType}" == "live" ]]; then
+            # Can't download a currently live video
+            vidStatus="skipped"
+            vidError="Video is live at time of indexing"
+        elif [[ "${vidType}" == "short" && "${includeShorts}" == "false" ]]; then
+            # Shorts aren't allowed
+            vidStatus="skipped"
+            vidError="Shorts not allowed per config"
+        elif [[ "${vidType}" == "waslive" && "${includeLiveBroadcasts}" == "false" ]]; then
+            # Past live broadcasts aren't allowed
+            vidStatus="skipped"
+            vidError="Past live broadcasts not allowed per config"
+        fi
+    fi
+elif [[ "${dbCount}" -eq "1" ]]; then
+    vidStatus="$(sqDb "SELECT STATUS FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+else
+    badExit "13" "Found [${dbCount}] results in source_videos table for file ID [${1}] -- Possible database corruption"
+fi
+
+# If we're not skipping the video
+if ! [[ "${vidStatus}" == "skipped" ]]; then
+    # If SponsorBlock is not 'disable'
+    if ! [[ "${sponsorblockEnable}" == "disable" ]]; then
+        # Check if it's available, if we haven't already
+        if [[ -z "${sponsorCurl}" ]]; then
+            sponsorApiCall "searchSegments?videoID=${1}"
+            sponsorCurl="${curlOutput}"
+        fi
+        if [[ "${sponsorCurl}" == "Not Found" ]]; then
+            printOutput "5" "No SponsorBlock data available for video"
+            sponsorblockAvailable="Not found [$(date)]"
+            if [[ "${sponsorblockRequire}" == "true" ]]; then
+                vidStatus="sb_wait"
+                vidError="SponsorBlock data required, but not available"
+            fi
+        else
+            printOutput "5" "SponsorBlock data found for video"
+            sponsorblockAvailable="Found [$(date)]"
+        fi
+    fi
+fi
+
+# Create the database channel entry if needed
+chanDbCount="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+if [[ "${chanDbCount}" -eq "0" ]]; then
+    if ! channelToDb "${channelId}"; then
+        printOutput "1" "Failed to add channel ID [${channelId}] to database -- Skipping"
+        continue
+    fi
+elif [[ "${chanDbCount}" -eq "1" ]]; then
+    # Safety check
     true
-elif ! [[ "${albumCreation}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${albumCreation}] failed to validate as an interger"
-    return 1
 else
-    badExit "125" "Impossible condition"
+    badExit "14" "Counted [${chanDbCount}] occurances of channel ID [${channelId}] -- Possible database corruption"
 fi
-# Convert it to YYYY-MM-DD
-albumCreation="$(date --date="@${albumCreation}" "+%Y-%m-%d")"
 
-# Get the description [Review] -- ${albumDesc}
-albumDesc="$(sqDb "SELECT DESC FROM source_videos WHERE ID = '${ytId}';")"
-if [[ -z "${albumDesc}" ]]; then
-    albumDesc="https://www.youtube.com/watch?v=${ytId}"
+if [[ "${dbCount}" -eq "0" ]]; then
+    # Insert what we have
+    if sqDb "INSERT INTO source_videos (ID, UPDATED) VALUES ('${1//\'/\'\'}', $(date +%s));"; then
+        printOutput "3" "Added file ID [${1}] to database"
+    else
+        badExit "15" "Failed to add file ID [${1}] to database"
+    fi
+elif [[ "${dbCount}" -eq "1" ]]; then
+    # Safety check
+    true
 else
-    albumDesc="https://www.youtube.com/watch?v=${ytId}${lineBreak}-----${lineBreak}${albumDesc}"
+    badExit "16" "Found [${dbCount}] results in source_videos table for file ID [${1}] -- Possible database corruption"
 fi
-# Encode it -- ${albumDescEncoded}
-albumDescEncoded="$(rawurlencode "${albumDesc}")"
 
-# Call curl PUT:
-if callCurlPut "${plexAdd}/library/sections/${audioLibraryId}/all?type=9&id=${1}&includeExternalMedia=1&title.value=${albumNameEncoded}&titleSort.value=${albumNameEncoded}&artist.title.value=${artistNameEncoded}&summary.value=${albumDescEncoded}&studio.value=YouTube&originallyAvailableAt.value=${albumCreation}&summary.locked=1&title.locked=1&titleSort.locked=1&originallyAvailableAt.locked=1&studio.locked=1&X-Plex-Token=${plexToken}"; then
-    printOutput "4" "Metadata for album [${albumName}] updated"
+# Update the title
+if sqDb "UPDATE source_videos SET TITLE = '${vidTitle//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated title for file ID [${1}]"
 else
-    printOutput "1" "Metadata update for album [${albumName}] with channel ID [${artistChanId}] and file ID [${ytId}] failed"
+    printOutput "1" "Failed to update title for file ID [${1}]"
+fi
+
+# Update the clean title
+if sqDb "UPDATE source_videos SET TITLE_CLEAN = '${vidTitleClean//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated clean title for file ID [${1}]"
+else
+    printOutput "1" "Failed to update clean title for file ID [${1}]"
+fi
+
+# Update the channel ID
+if sqDb "UPDATE source_videos SET CHANNEL_ID = '${channelId//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel ID for file ID [${1}]"
+else
+    printOutput "1" "Failed to update channel ID enable for file ID [${1}]"
+fi
+
+# Update the upload timestamp
+if sqDb "UPDATE source_videos SET TIMESTAMP = ${uploadEpoch}, UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated upload timestamp for file ID [${1}]"
+else
+    printOutput "1" "Failed to update upload timestamp enable for file ID [${1}]"
+fi
+
+# Update the upload year
+if sqDb "UPDATE source_videos SET YEAR = ${uploadYear}, UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated upload year for file ID [${1}]"
+else
+    printOutput "1" "Failed to update upload year enable for file ID [${1}]"
+fi
+
+# Update the description, if it's not empty
+if [[ -n "${vidDesc}" ]]; then
+    if sqDb "UPDATE source_videos SET DESC = '${vidDesc//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+        printOutput "5" "Updated descrption for file ID [${1}]"
+    else
+        printOutput "1" "Failed to update description for file ID [${1}]"
+    fi
+fi
+
+# Update the video type
+if sqDb "UPDATE source_videos SET TYPE = '${vidType//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated item type for file ID [${1}]"
+else
+    printOutput "1" "Failed to update item type enable for file ID [${1}]"
+fi
+
+# Update the item's output resolution
+if sqDb "UPDATE source_videos SET FORMAT = '${outputResolution//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated output resolution for file ID [${1}]"
+else
+    printOutput "1" "Failed to update output resolution enable for file ID [${1}]"
+fi
+
+# Update the item's include shorts rule
+if sqDb "UPDATE source_videos SET SHORTS = '${includeShorts//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated include shorts for file ID [${1}]"
+else
+    printOutput "1" "Failed to update include shorts enable for file ID [${1}]"
+fi
+
+# Update the item's include live broadcasts rule
+if sqDb "UPDATE source_videos SET LIVE = '${includeLiveBroadcasts//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated include live broadcasts for file ID [${1}]"
+else
+    printOutput "1" "Failed to update include live broadcasts enable for file ID [${1}]"
+fi
+
+# Update the item's marked as watched rule
+if sqDb "UPDATE source_videos SET WATCHED = '${markWatched//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated mark as watched rule for file ID [${1}]"
+else
+    printOutput "1" "Failed to update mark as watched rule enable for file ID [${1}]"
+fi
+
+# Update the item's status
+if sqDb "UPDATE source_videos SET STATUS = '${vidStatus//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated SponsorBlock enable for file ID [${1}]"
+else
+    printOutput "1" "Failed to update SponsorBlock enable for file ID [${1}]"
+fi
+
+# Update the error, if the status is not 'queued'
+if ! [[ "${vidStatus}" == "queued" ]]; then
+    if [[ -n "${vidError}" ]]; then
+        if sqDb "UPDATE source_videos SET ERROR = '${vidError//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+            printOutput "5" "Updated error for file ID [${1}]"
+        else
+            printOutput "1" "Failed to update error for file ID [${1}]"
+        fi
+    fi
+fi
+
+# Update the SponsorBlock enabled
+if sqDb "UPDATE source_videos SET SB_ENABLE = '${sponsorblockEnable//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated SponsorBlock enable for file ID [${1}]"
+else
+    printOutput "1" "Failed to update SponsorBlock enable for file ID [${1}]"
+fi
+if [[ ! "${sponsorblockEnable}" == "disable" ]]; then
+    # Update the SponsorBlock requirement
+    if sqDb "UPDATE source_videos SET SB_REQUIRE = '${sponsorblockEnable//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+        printOutput "5" "Updated SponsorBlock requirement for file ID [${1}]"
+    else
+        printOutput "1" "Failed to update SponsorBlock requirement for file ID [${1}]"
+    fi
+    # Update the SponsorBlock availability
+    if sqDb "UPDATE source_videos SET SB_AVAILABLE = '${sponsorblockAvailable//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+        printOutput "5" "Updated SponsorBlock availability for file ID [${1}]"
+    else
+        printOutput "1" "Failed to update SponsorBlock availability for file ID [${1}]"
+    fi
+fi
+
+# Get the order of all items in that season
+readarray -t seasonOrder < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId//\'/\'\'}' AND YEAR = ${uploadYear} ORDER BY TIMESTAMP ASC;")
+
+# Iterate through the season until our ID matches, so we know our position
+vidIndex="1"
+for z in "${seasonOrder[@]}"; do
+    printOutput "5" "Determining index - Year [${uploadYear}] - Position [${vidIndex}] - Item [${z}]"
+    if [[ "${z}" == "${1}" ]]; then
+        break
+    fi
+    (( vidIndex++ ))
+done
+printOutput "5" "Found index position [${vidIndex}] from [${#seasonOrder[@]}] items"
+
+# Make sure there isn't already something there
+indexCheck="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE  CHANNEL_ID = '${channelId//\'/\'\'}' AND YEAR = ${uploadYear} AND EP_INDEX = ${vidIndex};")"
+
+# Update the index number
+if sqDb "UPDATE source_videos SET EP_INDEX = ${vidIndex}, UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated season index to position [${vidIndex}] for file ID [${1}]"
+else
+    printOutput "1" "Failed to update season index for file ID [${1}]"
+fi
+
+# If we had another item in our position, straighten out our indexes
+if [[ "${indexCheck}" -ne "0" ]]; then
+    # We're not going to find a watch status for the video we're processing in Plex, so let's assign it now as watched/unwatched based on our config
+    # If it was to be marked watched, it already was. We only need to set this if we need to mark it was unwatched.
+    if [[ "${markWatched}" == "true" ]]; then
+        if [[ -z "${watchedArr["_${ytId}"]}" ]]; then
+            watchedArr["_${ytId}"]="watched"
+        else
+            if [[ "${watchedArr["_${ytId}"]}" == "watched" ]]; then
+                printOutput "5" "File ID [${ytId}] already marked as [watched]"
+            else
+                printAngryWarning
+                printOutput "2" "Attempted to overwrite file ID [${ytId}] watch status of [${watchedArr["_${ytId}"]}] with [watched]"
+            fi
+        fi
+    elif [[ "${markWatched}" == "false" ]]; then
+        if [[ -z "${watchedArr["_${ytId}"]}" ]]; then
+            watchedArr["_${ytId}"]="unwatched"
+        else
+            if [[ "${watchedArr["_${ytId}"]}" == "unwatched" ]]; then
+                printOutput "5" "File ID [${ytId}] already marked as [unwatched]"
+            else
+                printAngryWarning
+                printOutput "2" "Attempted to overwrite file ID [${ytId}] watch status of [${watchedArr["_${ytId}"]}] with [unwatched]"
+            fi
+        fi
+    else
+        badExit "17" "Impossible condition"
+    fi
+    # Update any misordered old index numbers
+    printOutput "5" "Begining retroactive index check"
+    readarray -t seasonOrder < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId//\'/\'\'}' AND YEAR = ${uploadYear} ORDER BY TIMESTAMP ASC;")
+    vidIndex="1"
+    getSeasonWatched="0"
+    for z in "${seasonOrder[@]}"; do
+        foundIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${z//\'/\'\'}';")"
+        printOutput "5" "Checking file ID [${z}] - Expecting position [${vidIndex}] - Current position [${foundIndex}]"
+        if [[ "${foundIndex}" -ne "${vidIndex}" ]]; then
+            # Doesn't match, update it
+            if sqDb "UPDATE source_videos SET EP_INDEX = ${vidIndex}, UPDATED = '$(date +%s)' WHERE ID = '${z}';"; then
+                printOutput "5" "Retroactively updated season index from [${foundIndex}] to [${vidIndex}] for file ID [${z}]"
+                # If the file has already been downloaded, we need to re-index it
+                vidStatus="$(sqDb "SELECT STATUS FROM source_videos WHERE ID = '${z//\'/\'\'}';")"
+                if [[ "${vidStatus}" == "downloaded" ]]; then
+                    printOutput "5" "Marking file ID [${z}] for move due to re-index"
+                    getSeasonWatched="1"
+                    printOutput "5" "Getting watch status for file ID [${z}] prior to move"
+                    # Add the affected files to our moveArr so we can move them
+                    # Only do this if it's not set, as we could be re-indexing a video multiple times
+                    if [[ -z "${reindexArr["_${z}"]}" ]]; then
+                        tmpChannelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+                        tmpChannelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+                        tmpVidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${z//\'/\'\'}';")"
+                        tmpVidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${z//\'/\'\'}';")"
+                        # Log the file ID as the key, and path we can find the old file at as the value
+                        reindexArr["_${z}"]="${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${foundIndex}") - ${tmpVidTitleClean} [${z}].mp4"
+                    fi
+                fi
+            else
+                printOutput "1" "Failed to retroactively update season index for file ID [${z}]"
+            fi
+        fi
+        (( vidIndex++ ))
+    done
+    
+    if [[ "${getSeasonWatched}" -eq "1" ]]; then
+        # We also need to record watch status for the whole rest of the season, or Plex is gonna fuck it up when we start moving files around
+        while read -r tmpId; do
+            # Record their watch status
+            if ! getWatchStatus "${tmpId}"; then
+                printOutput "1" "Failed to get watch status for file ID [${tmpId}]"
+            fi
+        done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId//\'/\'\'}' AND YEAR = ${tmpVidYear} AND STATUS = 'downloaded';")
+    fi
 fi
 }
 
-function printAngryWarning {
-printOutput "2" " __          __              _             _ "
-printOutput "2" " \ \        / /             (_)           | |"
-printOutput "2" "  \ \  /\  / /_ _ _ __ _ __  _ _ __   __ _| |"
-printOutput "2" "   \ \/  \/ / _\` | '__| '_ \| | '_ \ / _\` | |"
-printOutput "2" "    \  /\  / (_| | |  | | | | | | | | (_| |_|"
-printOutput "2" "     \/  \/ \__,_|_|  |_| |_|_|_| |_|\__, (_)"
-printOutput "2" "                                      __/ |  "
-printOutput "2" "                                     |___/   "
+function ytApiCall {
+if [[ "${#ytApiKeys[@]}" -ne "0" ]]; then
+    useLemnos="0"
+    if [[ -z "${apiKeyNum}" ]]; then
+        apiKeyNum="0"
+    fi
+    # Use a YouTube API key, with no throttling
+    callCurlGet "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
+    (( apiCallsYouTube++ ))
+    # Check for a 400 or 403 error code
+    errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
+    while [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; do
+        if [[ "${errorCode}" == "403" ]]; then
+            printOutput "2" "API key [#${apiKeyNum}] exhaused, rotating to next available key"
+        elif [[ "${errorCode}" == "400" ]]; then
+            printOutput "1" "API key [${ytApiKeys[${apiKeyNum}]}] appears to be invalid"
+            printOutput "2" "Rotating to next available API key"
+        fi
+        (( apiKeyNum++ ))
+        if [[ -n "${ytApiKeys[${apiKeyNum}]}" ]]; then
+            # Call curl again
+            callCurlGet "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
+            (( apiCallsYouTube++ ))
+            errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
+        else
+            # We've exhaused our keys, switch the Lemnos
+            unset ytApiKeys
+            useLemnos="1"
+        fi
+    done
+else
+    useLemnos="1"
+fi
+
+if [[ "${useLemnos}" -eq "1" ]]; then
+    # Use the free/no-key lemnoslife API, and throttle ourselves out of courtesy
+    callCurlGet "https://yt.lemnoslife.com/noKey/${1}" "goose's bash script - contact [github <at> goose <dot> ws] for any concerns or questions"
+    (( apiCallsLemnos++ ))
+    randomSleep "3" "7"
+fi
+}
+
+function sponsorApiCall {
+callCurlGet "https://sponsor.ajay.app/api/${1}" "goose's bash script - contact [github <at> goose <dot> ws] for any concerns or questions"
+(( apiCallsSponsor++ ))
 }
 
 function getChannelCountry {
@@ -2572,774 +1385,1102 @@ case "${1}" in
 esac
 }
 
-function ytApiCall {
-if [[ "${#ytApiKeys[@]}" -ne "0" ]]; then
-    useLemnos="0"
-    if [[ -z "${apiKeyNum}" ]]; then
-        apiKeyNum="0"
-    fi
-    # Use a YouTube API key, with no throttling
-    callCurl "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
-    (( apiCallsYouTube++ ))
-    # Check for a 400 or 403 error code
-    errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
-    while [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; do
-        if [[ "${errorCode}" == "403" ]]; then
-            printOutput "2" "API key [#${apiKeyNum}] exhaused, rotating to next available key"
-        elif [[ "${errorCode}" == "400" ]]; then
-            printOutput "1" "API key [${ytApiKeys[${apiKeyNum}]}] appears to be invalid"
-            printOutput "2" "Rotating to next available API key"
-        fi
-        (( apiKeyNum++ ))
-        if [[ -n "${ytApiKeys[${apiKeyNum}]}" ]]; then
-            # Call curl again
-            callCurl "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
-            (( apiCallsYouTube++ ))
-            errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
-        else
-            # We've exhaused our keys, switch the Lemnos
-            unset ytApiKeys
-            useLemnos="1"
-        fi
-    done
-else
-    useLemnos="1"
-fi
-
-if [[ "${useLemnos}" -eq "1" ]]; then
-    # Use the free/no-key lemnoslife API, and throttle ourselves out of courtesy
-    callCurl "https://yt.lemnoslife.com/noKey/${1}"
-    (( apiCallsLemnos++ ))
-    randomSleep "3" "7"
-fi
-}
-
-function compareFileIdToDb {
-# Check to see if the video is already in the database or not
-if [[ "${verifyMedia}" -eq "1" ]]; then
-    configLevel="4"
-    sponsorblockOpts="disable"
-    vidIncludeShorts="true"
-    audIncludeShorts="false"
-    includeLiveBroadcasts="false"
-    markWatched="false"
-    if [[ "${newMediaType}" == "video" ]]; then
-        videoOutput="original"
-        audioOutput="none"
-        vidStatus="downloaded"
-        audStatus="skipped"
-    elif [[ "${newMediaType}" == "audio" ]]; then
-        if [[ -z "${2}" ]]; then
-            badExit "126" "No audio type passed for new media update"
-        fi
-        videoOutput="none"
-        audioOutput="${2}"
-        vidStatus="skipped"
-        audStatus="downloaded"
-    else
-        badExit "127" "Impossible condition"
-    fi
-fi
-
-printOutput "5" "Entered 'compareFileIdToDb' with config level [${configLevel}]"
-
-dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${1}';")"
-# Validate it
-if [[ -z "${dbReply}" ]]; then
-    printOutput "1" "No data provided to validate interger"
-    return 1
-elif [[ "${dbReply}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    true
-elif ! [[ "${dbReply}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${dbReply}] failed to validate as an interger"
-    return 1
-else
-    badExit "128" "Impossible condition"
-fi
-
-if [[ "${dbReply}" -ge "2" ]]; then
-    badExit "129" "Database returned count [${dbReply}] -- Possible database corruption"
-elif [[ "${dbReply}" -eq "1" ]]; then
-    # Grab the title
-    assignTitle "${1}"
-    printOutput "5" "Found one instance of file ID [${1}] in database"
-    # The entry exists in the database, we should compare the existing config level to the current one.
-    # If the current one is lower, then we should update the source accordingly.
-    configReply="$(sqDb "SELECT CONFIG FROM source_videos WHERE ID = '${1}';")"
-    # Either reply will want to know what type of video it is
-    videoType="$(sqDb "SELECT TYPE FROM source_videos WHERE ID = '${1}';")"
-    if [[ "${configReply}" -gt "${configLevel}" ]]; then
-        printOutput "5" "Database config level outranked for file ID [${1}]"
-        # This video has already been indexed, and we outrank the previous config, so we just need to update the relevant config options
-
-        # Check to see what the existing VID_FORMAT and AUD_FORMAT are
-        configVidFormat="$(sqDb "SELECT VID_FORMAT FROM source_videos WHERE ID = '${1}';")"
-        # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-        if [[ -z "${configVidFormat}" ]]; then
-            badExit "130" "Existing video format lookup returned blank result for file ID [${1}] -- Possible database corruption"
-        fi
-        if ! [[ "${configVidFormat}" == "none" ]]; then
-            # Get the file status
-            vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${1}';")"
-            # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-            if [[ -z "${vidStatus}" ]]; then
-                badExit "131" "Existing video status lookup returned blank result for file ID [${1}] -- Possible database corruption"
-            fi
-
-            # It is not none, and we outrank whatever it is
-            # If we are 'none', we should not replace whatever the config option is
-            if [[ "${videoOutput}" == "none" ]]; then
-                # For preserving video, we should preserve set SB_OPTIONS, VID_SHORTS_DL, LIVE, and WATCHED
-                videoOutput="${configVidFormat}"
-                sponsorblockOpts="$(sqDb "SELECT SB_OPTIONS FROM source_videos WHERE ID = '${1}';")"
-                # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-                if [[ -z "${sponsorblockOpts}" ]]; then
-                    badExit "132" "Existing video sponsorblock option lookup returned blank result for file ID [${1}] -- Possible database corruption"
-                fi
-                vidIncludeShorts="$(sqDb "SELECT VID_SHORTS_DL FROM source_videos WHERE ID = '${1}';")"
-                # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-                if [[ -z "${vidIncludeShorts}" ]]; then
-                    badExit "133" "Existing video include shorts option lookup returned blank result for file ID [${1}] -- Possible database corruption"
-                fi
-                includeLiveBroadcasts="$(sqDb "SELECT LIVE FROM source_videos WHERE ID = '${1}';")"
-                # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-                if [[ -z "${includeLiveBroadcasts}" ]]; then
-                    badExit "134" "Existing video live broadcast option lookup returned blank result for file ID [${1}] -- Possible database corruption"
-                fi
-                markWatched="$(sqDb "SELECT WATCHED FROM source_videos WHERE ID = '${1}';")"
-                # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-                if [[ -z "${markWatched}" ]]; then
-                    badExit "135" "Existing video mark as watched option lookup returned blank result for file ID [${1}] -- Possible database corruption"
-                fi
-            else
-                if ! [[ "${vidStatus}" == "downloaded" ]]; then
-                    if [[ "${vidIncludeShorts}" == "true" && "${videoType}" == "short" ]]; then
-                        # Replace it with our data
-                        vidStatus="queued"
-                    elif [[ "${vidIncludeShorts}" == "false" ]] && ! [[ "${videoType}" == "short" ]]; then
-                        vidStatus="queued"
-                    else
-                        vidStatus="skipped"
-                    fi
-                fi
-            fi
-        fi
-
-        configAudFormat="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${1}';")"
-        # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-        if [[ -z "${configAudFormat}" ]]; then
-            badExit "136" "Existing audio format lookup returned blank result for file ID [${1}] -- Possible database corruption"
-        fi
-        audStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${1}';")"
-        if ! [[ "${configAudFormat}" == "none" ]]; then
-            # It is not none, and we outrank whatever it is
-            # If we are 'none', we should not replace whatever the config option is
-            # Get the file status
-            # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-            if [[ -z "${audStatus}" ]]; then
-                badExit "137" "Existing audio status lookup returned blank result for file ID [${1}] -- Possible database corruption"
-            fi
-            audIncludeShorts="$(sqDb "SELECT AUD_SHORTS_DL FROM source_videos WHERE ID = '${1}';")"
-            # Validate it. This has already been safety checked, so we just need to verify a non-empty output.
-            if [[ -z "${audIncludeShorts}" ]]; then
-                badExit "138" "Existing audio include shorts option lookup returned blank result for file ID [${1}] -- Possible database corruption"
-            fi
-        fi
-        if [[ "${audioOutput}" == "none" ]]; then
-            audioOutput="${configAudFormat}"
-        else
-            printOutput "5" "Audio status: ${audStatus}"
-            printOutput "5" "Include shorts: ${audIncludeShorts}"
-            printOutput "5" "Include live: ${includeLiveBroadcasts}"
-            printOutput "5" "Video type: ${videoType}"
-            if ! [[ "${audStatus}" == "downloaded" ]]; then
-                if [[ "${audIncludeShorts}" == "true" && "${videoType}" == "short" ]]; then
-                    # Shorts are allowed, and the video type is a short
-                    audStatus="queued"
-                elif [[ "${audIncludeShorts}" == "false" && "${videoType}" == "short" ]]; then
-                    # Shorts are not allowed, and the video type is a short
-                    audStatus="skipped"
-                elif [[ "${includeLiveBroadcasts}" == "true" && "${videoType}" == "waslive" ]]; then
-                    # Previous live broadcasts are allowed, and the video type is a previous live broadcast
-                    audStatus="queued"
-                elif [[ "${includeLiveBroadcasts}" == "false" && "${videoType}" == "waslive" ]]; then
-                    # Previous live broadcasts are not allowed, and the video type is a previous live broadcast
-                    audStatus="skipped"
-                else
-                    # Everything else can be queued, since this format is wanted
-                    audStatus="queued"
-                fi
-            fi
-        fi
-
-        if sqDb "UPDATE source_videos SET CONFIG = '${configLevel}', SB_OPTIONS = '${sponsorblockOpts}', VID_FORMAT = '${videoOutput}', AUD_FORMAT = '${audioOutput}', VID_SHORTS_DL = '${vidIncludeShorts}', AUD_SHORTS_DL = '${audIncludeShorts}', LIVE = '${includeLiveBroadcasts}', WATCHED = '${markWatched}', VID_STATUS = '${vidStatus}', AUD_STATUS = '${audStatus}', UPDATED = '$(date +%s)' WHERE ID = '${1}' ;"; then
-            printOutput "3" "Updated file ID [${1}] in database"
-        else
-            badExit "139" "Update of file ID [${1}] in database failed"
-        fi
-    else
-        # We do not outrank the current config; however, the current config may exclude audio/video we want.
-        # Check and see if we have 'none' for audio or video format
-        configVidFormat="$(sqDb "SELECT VID_FORMAT FROM source_videos WHERE ID = '${1}';")"
-        if [[ "${configVidFormat}" == "none" ]]; then
-            # Nothing is set. Do we have a value to set?
-            if ! [[ "${videoOutput}" == "none" ]]; then
-                # Yes, so let's set it.
-                if [[ "${newMediaType}" == "video" ]]; then
-                    vidStatus="downloaded"
-                else
-                    vidStatus="queued"
-                fi
-                # For setting video, we should also set SB_OPTIONS, VID_SHORTS_DL, LIVE, and WATCHED. These have already been verified.
-                if sqDb "UPDATE source_videos SET SB_OPTIONS = '${sponsorblockOpts}', VID_FORMAT = '${videoOutput}', VID_SHORTS_DL = '${vidIncludeShorts}', LIVE = '${includeLiveBroadcasts}', WATCHED = '${markWatched}', VID_STATUS = '${vidStatus}', UPDATED = '$(date +%s)' WHERE ID = '${1}' ;"; then
-                    printOutput "3" "Updated file ID [${1}] in database"
-                else
-                    badExit "140" "Update of file ID [${1}] in database failed"
-                fi
-            fi
-        fi
-
-        configAudFormat="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${1}';")"
-        if [[ "${configAudFormat}" == "none" ]]; then
-            # Nothing is set. Do we have a value to set?
-            if ! [[ "${audioOutput}" == "none" ]]; then
-                # Yes, so let's set it.
-                if [[ "${newMediaType}" == "audio" ]]; then
-                    audStatus="downloaded"
-                else
-                    if [[ "${audIncludeShorts}" == "true" && "${videoType}" == "short" ]]; then
-                    # Shorts are allowed, and the video type is a short
-                    audStatus="queued"
-                    elif [[ "${audIncludeShorts}" == "false" && "${videoType}" == "short" ]]; then
-                        # Shorts are not allowed, and the video type is a short
-                        audStatus="skipped"
-                    elif [[ "${includeLiveBroadcasts}" == "true" && "${videoType}" == "waslive" ]]; then
-                        # Previous live broadcasts are allowed, and the video type is a previous live broadcast
-                        audStatus="queued"
-                    elif [[ "${includeLiveBroadcasts}" == "false" && "${videoType}" == "waslive" ]]; then
-                        # Previous live broadcasts are not allowed, and the video type is a previous live broadcast
-                        audStatus="skipped"
-                    else
-                        # Everything else can be queued, since this format is wanted
-                        audStatus="queued"
-                    fi
-                fi
-                if sqDb "UPDATE source_videos SET AUD_FORMAT = '${audioOutput}', AUD_SHORTS_DL = '${audIncludeShorts}', AUD_STATUS = '${audStatus}', UPDATED = '$(date +%s)' WHERE ID = '${1}' ;"; then
-                    printOutput "3" "Updated file ID [${1}] in database"
-                else
-                    badExit "141" "Update of file ID [${1}] in database failed"
-                fi
-            fi
-        fi
-    fi
-elif [[ "${dbReply}" -eq "0" ]]; then
-    # It's not in the database
-    unset vidTitle channelId epochDate uploadYear
-    # Get the video info
-    # Because we can't get the time string through yt-dlp, there's no point in trying to use it as our fake API here, we *have* to API query YouTube
-    # Query the YouTube API for the video info
-    printOutput "5" "Calling API for video info [${1}]"
-    ytApiCall "videos?id=${1}&part=snippet,liveStreamingDetails"
-    # Check to make sure we got a result
-    apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
-    # Validate it
-    if [[ -z "${apiResults}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${apiResults}] failed to validate as an interger"
-        return 1
-    else
-        badExit "142" "Impossible condition"
-    fi
-    if [[ "${apiResults}" -eq "0" ]]; then
-        printOutput "2" "API lookup for video zero results (Is the video private?)"
-        if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-            printOutput "3" "Re-attempting video ID lookup via yt-dlp + cookie"
-            dlpApiCall="$(yt-dlp --no-warnings -J --cookies "${cookieFile}" "https://www.youtube.com/watch?v=${1}" 2>/dev/null)"
-            #throttleDlp
-            
-            if [[ "$(yq -p json ".id" <<<"${dlpApiCall}")" == "${1}" ]]; then
-                # Yes, it's a private video we can auth via cookie
-                printOutput "3" "Lookup via cookie auth successful"
-                # Get the video title
-                vidTitle="$(yq -p json ".title" <<<"${dlpApiCall}")"
-                # Get the video description
-                # Blank if none set
-                vidDesc="$(yq -p json ".description" <<<"${dlpApiCall}")"
-                # Get the channel ID
-                channelId="$(yq -p json ".channel_id" <<<"${dlpApiCall}")"
-                # Get the channel name
-                chanName="$(yq -p json ".channel" <<<"${dlpApiCall}")"
-                # This is not provided by the yt-dlp payload. It cannot be looked up via the official API without oauth,
-                # which I do not want to implement for a number of reasons. Instead, I am going to get this via some very
-                # shameful code. Please do not read the below 3 lines, I am ashamed of them.
-                uploadDate="$(curl -b "${cookieFile}" -skL "https://www.youtube.com/watch?v=${1}" | grep -E -o "<meta itemprop=\"datePublished\" content=\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}\">")"
-                uploadDate="${uploadDate%\">}"
-                uploadDate="${uploadDate##*\"}"
-                # Ok I'm done, you can read it again.
-                videoType="$(yq -p json ".live_status" <<<"${dlpApiCall}")"
-                # We just need this to be a non-null value
-                broadcastStart="ytdlp"
-            else
-                printOutput "1" "Unable to preform lookup on file ID [${1}] via yt-dlp -- Skipping"
-                return 1
-            fi
-        else
-            printOutput "1" "File ID [${1}] API lookup failed, and no cookie file provided to attempt to yt-dlp lookup -- Skipping"
-            return 1
-        fi
-    elif [[ "${apiResults}" -eq "1" ]]; then
-        # Get the video title
-        vidTitle="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
-        # Get the video description
-        # Blank if none set
-        vidDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
-        # Get the channel ID
-        channelId="$(yq -p json ".items[0].snippet.channelId" <<<"${curlOutput}")"
-        # Get the channel name
-        chanName="$(yq -p json ".items[0].snippet.channelTitle" <<<"${curlOutput}")"
-        # Get the upload date
-        uploadDate="$(yq -p json ".items[0].snippet.publishedAt" <<<"${curlOutput}")"
-        # Get the video type (Check to see if it's a live broadcast)
-        videoType="$(yq -p json ".items[0].snippet.liveBroadcastContent" <<<"${curlOutput}")"
-        # Get the broadcast start time (Will only return value if it's a live broadcast)
-        broadcastStart="$(yq -p json ".items[0].liveStreamingDetails.actualStartTime" <<<"${curlOutput}")"
-    else
-        badExit "143" "Impossible condition"
-    fi
-
-    # Validate the video title
-    if [[ -z "${vidTitle}" ]]; then
-        ### SKIP CONDITION
-        printOutput "1" "Video title returned blank result [${vidTitle}]"
-        return 1
-    fi
-    # Save this for later
-    vidTitleClean="${vidTitle}"
-    vidTitleOrig="${vidTitle}"
-    if [[ -z "${titleById[_${1}]}" ]]; then
-        titleById["_${1}"]="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${1}';")"
-    fi
-    # Clean the title up for sqlite
-    vidTitle="${vidTitle//\'/\'\'}"
-
-    # Get the video title with filesystem safe characters
-    # Trim any leading spaces and/or periods
-    while [[ "${vidTitleClean:0:1}" =~ ^( |\.)$ ]]; do
-        vidTitleClean="${vidTitleClean# }"
-        vidTitleClean="${vidTitleClean#\.}"
-    done
-    # Trim any trailing spaces and/or periods
-    while [[ "${vidTitleClean:$(( ${#vidTitleClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
-        vidTitleClean="${vidTitleClean% }"
-        vidTitleClean="${vidTitleClean%\.}"
-    done
-    # Replace any forward or back slashes \ /
-    vidTitleClean="${vidTitleClean//\//_}"
-    vidTitleClean="${vidTitleClean//\\/_}"
-    # Replace any colons :
-    vidTitleClean="${vidTitleClean//:/}"
-    # Replace any stars *
-    vidTitleClean="${vidTitleClean//\*/}"
-    # Replace any question marks ?
-    vidTitleClean="${vidTitleClean//\?/}"
-    # Replace any quotation marks "
-    vidTitleClean="${vidTitleClean//\"/}"
-    # Replace any brackets < >
-    vidTitleClean="${vidTitleClean//</}"
-    vidTitleClean="${vidTitleClean//>/}"
-    # Replace any vertical bars |
-    vidTitleClean="${vidTitleClean//\|/}"
-    # Condense any instances of '_-_'
-    while [[ "${vidTitleClean}" =~ .*"_-_".* ]]; do
-        vidTitleClean="${vidTitleClean//_-_/ - }"
-    done
-    # Condense any multiple spaces
-    while [[ "${vidTitleClean}" =~ .*"  ".* ]]; do
-        vidTitleClean="${vidTitleClean//  / }"
-    done
-    # Clean the title up for sqlite
-    vidTitleClean="${vidTitleClean//\'/\'\'}"
-
-    # If our video description is a single space, we don't want it
-    if [[ "${vidDesc}" == " " ]]; then
-        unset vidDesc
-    fi
-    # If we have a description, clean it up for sqlite
-    if [[ -n "${vidDesc}" && ! "${vidDesc}" == "null" ]]; then
-        vidDesc="${vidDesc//\'/\'\'}"
-    fi
-
-    # Validate the channel ID
-    if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-        ### SKIP CONDITION
-        printOutput "1" "Unable to validate channel ID [${channelId}]"
-        return 1
-    fi
-    # Probably unnecessary -- Clean the channel ID up for sqlite
-    channelId="${channelId//\'/\'\'}"
-
-    # Validate the upload date, by making sure it's not blank (Format can vary)
-    if [[ -z "${uploadDate}" ]]; then
-        printOutput "1" "Upload date lookup failed for video [${1}]"
-        return 1
-    fi
-    # Convert the date to a Unix timestamp
-    epochDate="$(date --date="${uploadDate}" "+%s")"
-    if ! [[ "${epochDate}" =~ ^[0-9]+$ ]]; then
-        ### SKIP CONDITION
-        printOutput "1" "Unable to convert upload date to unix epoch timestamp [${uploadDate}][${epochDate}]"
-        return 1
-    fi
-    # Extract the year, so we can match the video to a season
-    uploadYear="${uploadDate:0:4}"
-    if ! [[ "${uploadYear}" =~ ^[0-9]{4}$ ]]; then
-        ### SKIP CONDITION
-        printOutput "1" "Unable to extract year from video [${uploadDate}][${uploadYear}]"
-        return 1
-    fi
-
-    # Validate the video type
-    if [[ -z "${videoType}" ]]; then
-        printOutput "1" "Video type lookup returned blank result [${videoType}]"
-        return 1
-    elif [[ "${videoType}" == "none" || "${videoType}" == "not_live" || "${videoType}" == "was_live" ]]; then
-        # Not currently live
-        # Check to see if it's a previous broadcast
-        if [[ -z "${broadcastStart}" ]]; then
-            # This should not be blank, it should be 'null' or a date/time
-            printOutput "1" "Broadcast start time lookup returned blank result [${broadcastStart}] -- Skipping"
-            return 1
-        elif [[ "${broadcastStart}" == "null" || "${videoType}" == "not_live" ]]; then
-            # It doesn't have one. Must be a short, or a regular video.
-            # Use our bullshit to find out
-            httpCode="$(curl -m 15 -s -I -o /dev/null -w "%{http_code}" "https://www.youtube.com/shorts/${1}")"
-            if [[ "${httpCode}" == "000" ]]; then
-                # We're being throttled
-                printOutput "2" "Throttling detected"
-                randomSleep "5" "15"
-                httpCode="$(curl -m 15 -s -I -o /dev/null -w "%{http_code}" "https://www.youtube.com/shorts/${1}")"
-            fi
-            if [[ -z "${httpCode}" ]]; then
-                printOutput "1" "Curl lookup to determine video type returned blank result [${httpCode}] -- Skipping"
-                return 1
-            elif [[ "${httpCode}" == "200" ]]; then
-                # It's a short
-                printOutput "4" "Determined video to be a short"
-                videoType="short"
-            elif [[ "${httpCode}" == "303" ]]; then
-                # It's a regular video
-                printOutput "4" "Determined video to be a standard video"
-                videoType="normal"
-            elif [[ "${httpCode}" == "404" ]]; then
-                # No such video exists
-                printOutput "1" "Curl lookup returned HTTP code 404 for file ID [${1}] -- Skipping"
-                return 1
-            else
-                printOutput "1" "Curl lookup to determine file ID [${1}] type returned unexpected result [${httpCode}] -- Skipping"
-                return 1
-            fi
-        elif [[ "${broadcastStart}" =~ ^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$ || "${videoType}" == "was_live" ]]; then
-            printOutput "4" "Determined video to be a past live broadcast"
-            videoType="waslive"
-        else
-            printOutput "Broadcast start time lookup returned unexpected result [${broadcastStart}] -- Skipping"
-            return 1
-        fi
-    elif [[ "${videoType}" == "live" || "${videoType}" == "is_live" ]]; then
-        # Currently live
-        printOutput "1" "File ID [${1}] detected to be a live broadcast, unable to save -- Skipping"
-        return 1
-    else
-        printOutput "1" "File ID [${1}] lookup video type returned invalid result [${videoType}] -- Skipping"
-        return 1
-    fi
-
-    # Check to see if the channel ID exists in the database
-    dbReply="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${channelId}';")"
-    # Validate it
-    if [[ -z "${dbReply}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        return 1
-    elif [[ "${dbReply}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${dbReply}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${dbReply}] failed to validate as an interger"
-        return 1
-    else
-        badExit "144" "Impossible condition"
-    fi
-    if [[ "${dbReply}" -ge "2" ]]; then
-        badExit "145" "Database returned count [${dbReply}] -- Possible database corruption"
-    elif [[ "${dbReply}" -eq "1" ]]; then
-        # Check the channel ID and channel name for path correctness
-        # (Did the channel name change?)
-        chanNameDb="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
-        if ! [[ "${chanNameDb}" == "${chanName}" ]]; then
-            printOutput "2" "Channel name for channel ID [${channelId}] has changed from [${chanNameDb}] to [${chanName}]"
-            printOutput "4" "Moving channel downloads to correct name directory"
-            # Store the channel name for our directory name
-            channelNameClean="${chanName}"
-            # Store the channel name for stdout
-            chanNameOrig="${chanName}"
-            # Clean the name up for sqlite
-            chanName="${chanName//\'/\'\'}"
-            # Trim any leading spaces and/or periods
-            while [[ "${channelNameClean:0:1}" =~ ^( |\.)$ ]]; do
-                channelNameClean="${channelNameClean# }"
-                channelNameClean="${channelNameClean#\.}"
-            done
-            # Trim any trailing spaces and/or periods
-            while [[ "${channelNameClean:$(( ${#channelNameClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
-                channelNameClean="${channelNameClean% }"
-                channelNameClean="${channelNameClean%\.}"
-            done
-            # Replace any forward or back slashes \ /
-            channelNameClean="${channelNameClean//\//_}"
-            channelNameClean="${channelNameClean//\\/_}"
-            # Replace any colons :
-            channelNameClean="${channelNameClean//:/-}"
-            # Replace any stars *
-            channelNameClean="${channelNameClean//\*/}"
-            # Replace any question marks ?
-            channelNameClean="${channelNameClean//\?/}"
-            # Replace any quotation marks "
-            channelNameClean="${channelNameClean//\"/}"
-            # Replace any brackets < >
-            channelNameClean="${channelNameClean//</}"
-            channelNameClean="${channelNameClean//>/}"
-            # Replace any vertical bars |
-            channelNameClean="${channelNameClean//\|/}"
-            # Condense any instances of '_-_'
-            while [[ "${channelNameClean}" =~ .*"_-_".* ]]; do
-                channelNameClean="${channelNameClean//_-_/ - }"
-            done
-            # Condense any multiple spaces
-            while [[ "${channelNameClean}" =~ .*"  ".* ]]; do
-                channelNameClean="${channelNameClean//  / }"
-            done
-
-            # String the whole path together
-            chanDir="${channelNameClean} [${channelId}]"
-
-            # Get the old path
-            oldChanPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId}';")"
-            # Get the old clean name, for the file loop
-            oldChanCleanName="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId}';")"
-
-            # We only need to move a video path if one exists
-            if [[ -d "${videoOutputDir}/${oldChanPath}" ]]; then
-                # It does. Check to make sure there's not already a directory where we want to move to.
-                if [[ -d "${videoOutputDir}/${chanDir}" ]]; then
-                    badExit "146" "Unable to correct channel ID [${channelId}] name from [${chanNameDb}] to [${chanNameOrig}] -- Directory already exists at [${videoOutputDir}/${chanDir}]"
-                fi
-                
-                # Get the watch status for all items in that old folder
-                # Get a list of all the episodes in this series
-                while read -r z; do
-                    # ${z} is the rating key for each season of a channel ID
-                    
-                    # Get the watch status for the season
-                    callCurl "${plexAdd}/library/metadata/${z}/children?X-Plex-Token=${plexToken}"
-                    # For each rating key in this season
-                    while read -r zz; do
-                        # Media item rating key is zz
-                        fId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                        fId="${fId%\]\.*}"
-                        fId="${fId##*\[}"
-                        watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .\"+@viewOffset\"" <<<"${curlOutput}")"
-                        if [[ "${watchStatus}" =~ ^[0-9]+$ ]]; then
-                            # It's in progress
-                            reindexArr["_${fId}"]="${watchStatus}"
-                        else
-                            # Not in progress, we need to check the view count
-                            watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .\"+@viewCount\"" <<<"${curlOutput}")"
-                            if [[ "${watchStatus}" == "null" ]]; then
-                                # It's unwatched
-                                reindexArr["_${fId}"]="unwatched"
-                            else
-                                # It's watched
-                                reindexArr["_${fId}"]="watched"
-                            fi
-                        fi
-                    done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-                done < <(sqDb "SELECT RATING_KEY FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}';")
-                
-                # Let's just move the base folder
-                if ! mv "${videoOutputDir}/${oldChanPath}" "${videoOutputDir}/${chanDir}"; then
-                    badExit "147" "Failed to update channel ID [${channelId}] from [${chanNameDb}] to [${chanNameOrig}]"
-                fi
-                # Now let's rename each individual video in the series
-                movedVids="0"
-                while read -r z; do
-                    # The yt ID is ${z}, we will need to get the TITLE_CLEAN for each item passed
-                    titleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${z}';")"
-                    # We also need the year (Season)
-                    vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${z}';")"
-                    # We also need the episode index number (Episode number)
-                    vidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${z}';")"
-                    # Now we have the path of where the video should be
-                    if ! mv "${videoOutputDir}/${chanDir}/Season ${vidYear}/${oldChanCleanName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${titleClean} [${z}].mp4" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${titleClean} [${z}].mp4"; then
-                        badExit "148" "Failed to update video file [S${vidYear}E$(printf '%03d' "${vidIndex}")] for channel ID [${channelId}]"
-                    fi
-                    if ! mv "${videoOutputDir}/${chanDir}/Season ${vidYear}/${oldChanCleanName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${titleClean} [${z}].jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${titleClean} [${z}].jpg"; then
-                        badExit "149" "Failed to update video thumbnail [S${vidYear}E$(printf '%03d' "${vidIndex}")] for channel ID [${channelId}]"
-                    fi
-                    # We've successfully moved the files, let's update our UPDATED timestamp
-                    if ! sqDb "UPDATE source_videos SET UPDATED = '$(date +%s)' WHERE ID = '${z}';"; then
-                        printOutput "1" "Update for file ID [${z}] failed"
-                    fi
-                    (( movedVids++ ))
-                done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}';")
-            fi
-
-            # Clean the path up for sqlite
-            chanPathClean="${chanDir//\'/\'\'}"
-            # Clean the name up for sqlite
-            channelNameClean="${channelNameClean//\'/\'\'}"
-            
-            # Update the channel image
-            if ! mv "${videoOutputDir}/${chanDir}/show.jpg" "${videoOutputDir}/${chanDir}/show.old.jpg"; then
-                printOutput "1" "Failed to back up old channel image"
-            fi
-            # Setting the 'updateMetadata' flag will cause the 'getChannelInfo' function to update the show and season images
-            updateMetadata="1"
-            if ! getChannelInfo "${channelId}"; then
-                printOutput "1" "Failed to retrieve channel info for [${channelId}]"
-            fi
-            updateMetadata="0"
-
-            # Drop any old rating key references
-            sqDb "DELETE FROM video_rating_key_by_channel WHERE CHANNEL_ID = '${channelId}';"
-            sqDb "DELETE FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}';"
-            while read -r dbVidId; do
-                sqDb "DELETE FROM video_rating_key_by_item WHERE ID = '${dbVidId}';"
-            done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}';")
-            
-            # Add the new channel to be processed for metadata later
-            newVideoDir+=("${channelId}")
-            
-            # Post the changes to the database
-            if ! sqDb "UPDATE source_channels SET NAME = '${chanName}', NAME_CLEAN = '${channelNameClean}', PATH = '${chanPathClean}', UPDATED = '$(date +%s)' WHERE ID = '${channelId}';"; then
-                printOutput "1" "Update for channel ID [${channelId}] failed"
-            else
-                printOutput "3" "Updated channel ID [${channelId}] from [${chanNameDb}] to [${chanNameOrig}] -- Moved [${movedVids}] videos"
-            fi
-        fi
-    elif [[ "${dbReply}" -eq "0" ]]; then
-        if ! getChannelInfo "${channelId}"; then
-            printOutput "1" "Failed to retrieve channel info for [${channelId}]"
-            return 1
-        fi
-    fi
-
-    # These are already set if we're in verify media mode
-    if [[ "${verifyMedia}" -eq "0" ]]; then
-        if [[ "${vidIncludeShorts}" == "false" && "${videoType}" == "short" ]]; then
-            vidStatus="skipped"
-        elif [[ "${videoOutput}" == "none" ]]; then
-            vidStatus="skipped"
-        else
-            vidStatus="queued"
-        fi
-
-        if ! [[ "${audioOutput}" == "none" ]]; then
-            if [[ "${audIncludeShorts}" == "false" && "${videoType}" == "short" ]]; then
-                audStatus="skipped"
-            else
-                audStatus="queued"
-            fi
-        else
-            audStatus="skipped"
-        fi
-    fi
-
-    # Insert it into the database
-    if sqDb "INSERT INTO source_videos (ID, CONFIG, TITLE, TITLE_CLEAN, CHANNEL_ID, TIMESTAMP, YEAR, SB_OPTIONS, VID_FORMAT, AUD_FORMAT, VID_SHORTS_DL, AUD_SHORTS_DL, LIVE, WATCHED, TYPE, VID_STATUS, AUD_STATUS, UPDATED) VALUES ('${1}', ${configLevel}, '${vidTitle}', '${vidTitleClean}', '${channelId}', ${epochDate}, ${uploadYear}, '${sponsorblockOpts}', '${videoOutput}', '${audioOutput}', '${vidIncludeShorts}', '${audIncludeShorts}', '${includeLiveBroadcasts}', '${markWatched}', '${videoType}', '${vidStatus}', '${audStatus}', $(date +%s));"; then
-        printOutput "3" "Added video [${vidTitleOrig}] ID [${1}] to database"
-    else
-        badExit "150" "Failed to add file ID [${1}] to database"
-    fi
-
-    # If we have a video description, add that entry too
-    if [[ -n "${vidDesc}" && ! "${vidDesc}" == "null" ]]; then
-        if sqDb "UPDATE source_videos SET DESC = '${vidDesc}', UPDATED = $(date +%s) WHERE ID = '${ytId}';"; then
-            printOutput "5" "Appended video description to database entry for file ID [${ytId}]"
-        else
-            badExit "151" "Unable to append video description to database entry for file ID [${ytId}]"
-        fi
-    fi
-fi
-}
-
 function makeShowImage {
-# ${1} is ${chanDir}
-# ${2} is ${channelId}
+# ${1} is ${channelId}
 
 # Get the channel image
-dbReply="$(sqDb "SELECT IMAGE FROM source_channels WHERE ID = '${2}';")"
+local dbReply
+local channelPath
+dbReply="$(sqDb "SELECT IMAGE FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
 if [[ -n "${dbReply}" ]]; then
     # If the video directory exists, download it
-    if ! [[ -d "${videoOutputDir}/${1}" ]]; then
-        if ! mkdir -p "${videoOutputDir}/${1}"; then
-            printOutput "1" "Failed to create output directory [${videoOutputDir}/${1}]"
+    if ! [[ -d "${outputDir}/${channelPath}" ]]; then
+        if ! mkdir -p "${outputDir}/${channelPath}"; then
+            printOutput "1" "Failed to create output directory [${outputDir}/${channelPath}]"
             return 1
         fi
+        newVideoDir+=("${channelId}")
     fi
-    callCurlDownload "${dbReply}" "${videoOutputDir}/${1}/show.jpg"
 fi
+if [[ -e "${outputDir}/${channelPath}/show.jpg" ]]; then
+    printOutput "5" "Existing show image found, downloading new version to compare"
+    callCurlDownload "${dbReply}" "${outputDir}/${channelPath}/show.new.jpg"
+    if cmp -s "${outputDir}/${channelPath}/show.jpg" "${outputDir}/${channelPath}/show.new.jpg"; then
+        printOutput "5" "No changes detected, removing newly downloaded show image file"
+        if ! rm -f "${outputDir}/${channelPath}/show.new.jpg"; then
+            printOutput "1" "Failed to remove newly downloaded show image file for channel ID [${1}]"
+        fi
+    else
+        printOutput "4" "New show image detected, backing up old show image and replacing with new one"
+        if ! mv "${outputDir}/${channelPath}/show.jpg" "${outputDir}/${channelPath}/.show.bak-$(date +%s).jpg"; then
+            printOutput "1" "Failed to back up previously downloaded show image file for channel ID [${1}]"
+        fi
+        if ! mv "${outputDir}/${channelPath}/show.new.jpg" "${outputDir}/${channelPath}/show.jpg"; then
+            printOutput "1" "Failed to move newly downloaded show image file for channel ID [${1}]"
+        fi
+    fi
+else
+    callCurlDownload "${dbReply}" "${outputDir}/${channelPath}/show.jpg"
+    printOutput "5" "Show image created for channel directory [${channelPath}]"
+fi
+
 # Get the background image, if one exists
-dbReply="$(sqDb "SELECT BANNER FROM source_channels WHERE ID = '${2}';")"
-if [[ -n "${dbReply}" ]]; then
-    callCurlDownload "${dbReply}" "${videoOutputDir}/${1}/background.jpg"
+dbReply="$(sqDb "SELECT BANNER FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+if [[ -n "${dbReply}" ]]; then    
+    if [[ -e "${outputDir}/${channelPath}/background.jpg" ]]; then
+        printOutput "5" "Existing background image found, downloading new version to compare"
+        callCurlDownload "${dbReply}" "${outputDir}/${channelPath}/background.new.jpg"
+        if cmp -s "${outputDir}/${channelPath}/background.jpg" "${outputDir}/${channelPath}/background.new.jpg"; then
+            printOutput "5" "No changes detected, removing newly downloaded background image file"
+            if ! rm -f "${outputDir}/${channelPath}/background.new.jpg"; then
+                printOutput "1" "Failed to remove newly downloaded background image file for channel ID [${1}]"
+            fi
+        else
+            printOutput "4" "New background image detected, backing up old image and replacing with new one"
+            if ! mv "${outputDir}/${channelPath}/background.jpg" "${outputDir}/${channelPath}/.background.bak-$(date +%s).jpg"; then
+                printOutput "1" "Failed to back up previously downloaded background image file for channel ID [${1}]"
+            fi
+            if ! mv "${outputDir}/${channelPath}/background.new.jpg" "${outputDir}/${channelPath}/background.jpg"; then
+                printOutput "1" "Failed to move newly downloaded background image file for channel ID [${1}]"
+            fi
+        fi
+    else
+        callCurlDownload "${dbReply}" "${outputDir}/${channelPath}/background.jpg"
+        printOutput "5" "Background image created for channel directory [${channelPath}]"
+    fi
 fi
 }
 
 function makeSeasonImage {
-# ${1} is ${chanDir}
+# ${1} is ${channelId}
 # ${2} is ${vidYear}
-# ${3} is ${channelId} (Only needed if we need to call 'makeShowImage'
+local channelPath
+channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
 # Make sure we have a base show image to work with
-if ! [[ -e "${videoOutputDir}/${1}/show.jpg" ]]; then
-    if makeShowImage "${1}" "${3}"; then
-        printOutput "5" "Show image created for channel directory [${1}]"
+if ! [[ -e "${outputDir}/${channelPath}/show.jpg" ]]; then
+    if makeShowImage "${1}"; then
+        printOutput "5" "No image for show detected, calling make show image function"
     else
-        printOutput "1" "Failed to create show image for channel directory [${1}]"
+        printOutput "1" "Failed to create show image for channel ID [${1}]"
     fi
 fi
 # Add the season folder, if required
-if ! [[ -d "${videoOutputDir}/${1}/Season ${2}" ]]; then
-    if ! mkdir -p "${videoOutputDir}/${1}/Season ${2}"; then
-        badExit "152" "Unable to create season folder [${videoOutputDir}/${1}/Season ${2}]"
+if ! [[ -d "${outputDir}/${channelPath}/Season ${2}" ]]; then
+    if ! mkdir -p "${outputDir}/${channelPath}/Season ${2}"; then
+        badExit "18" "Unable to create season folder [${outputDir}/${channelPath}/Season ${2}]"
     fi
 fi
 # Create the image
-if [[ -e "${videoOutputDir}/${1}/show.jpg" ]]; then
+if [[ -e "${outputDir}/${channelPath}/show.jpg" ]]; then
     # Get the height of the show image
-    posterHeight="$(identify -format "%h" "${videoOutputDir}/${1}/show.jpg")"
+    posterHeight="$(identify -format "%h" "${outputDir}/${channelPath}/show.jpg")"
     # We want 0.3 of the height, with no trailing decimal
     # We have to use 'awk' here, since bash doesn't like floating decimals
     textHeight="$(awk '{print $1 * $2}' <<<"${posterHeight} 0.3")"
     textHeight="${textHeight%\.*}"
     strokeHeight="$(awk '{print $1 * $2}' <<<"${textHeight} 0.03")"
     strokeHeight="${strokeHeight%\.*}"
-    convert "${videoOutputDir}/${1}/show.jpg" -gravity Center -pointsize "${textHeight}" -fill white -stroke black -strokewidth "${strokeHeight}" -annotate 0 "${2}" "${videoOutputDir}/${1}/Season ${2}/Season${2}.jpg"
+    convert "${outputDir}/${channelPath}/show.jpg" -gravity Center -pointsize "${textHeight}" -fill white -stroke black -strokewidth "${strokeHeight}" -annotate 0 "${2}" "${outputDir}/${channelPath}/Season ${2}/Season${2}.jpg"
 else
-    printOutput "1" "Unable to generate season poster for [${1}]"
+    printOutput "1" "Unable to generate season poster for channel ID [${1}] season [${2}]"
 fi
 }
 
-function throttleDlp {
-if ! [[ "${throttleMin}" -eq "0" && "${throttleMax}" -eq "0" ]]; then
-    printOutput "4" "Throttling after calling yt-dlp"
-    randomSleep "${throttleMin}" "${throttleMax}"
+function channelToDb {
+# Get the channel info from the YouTube API
+unset chanName chanNameClean chanDate chanEpochDate chanSubs chanCountry chanUrl chanVids chanViews chanDesc chanPathClean chanImage chanBanner
+
+# API call
+printOutput "5" "Calling API for channel info [${1}]"
+ytApiCall "channels?id=${1}&part=snippet,statistics,brandingSettings"
+apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
+
+# Validate it
+if [[ -z "${apiResults}" ]]; then
+    printOutput "1" "No data provided to validate integer"
+    return 1
+elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+    # Expected outcome
+    true
+elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Data [${apiResults}] failed to validate as an integer"
+    return 1
+else
+    badExit "19" "Impossible condition"
 fi
+
+if [[ "${apiResults}" -eq "0" ]]; then
+    printOutput "1" "API lookup for channel info returned zero results -- Skipping"
+    return 1
+fi
+
+# Get the channel name
+chanName="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
+# Validate it
+if [[ -z "${chanName}" ]]; then
+    printOutput "1" "No channel name returned from API lookup for channel ID [${1}] -- Skipping"
+    return 1
+fi
+printOutput "5" "Channel name [${chanName}]"
+
+# Store the clean channel name for our directory name
+chanNameClean="${chanName}"
+# Trim any leading spaces and/or periods
+while [[ "${chanNameClean:0:1}" =~ ^( |\.)$ ]]; do
+    chanNameClean="${chanNameClean# }"
+    chanNameClean="${chanNameClean#\.}"
+done
+# Trim any trailing spaces and/or periods
+while [[ "${chanNameClean:$(( ${#chanNameClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
+    chanNameClean="${chanNameClean% }"
+    chanNameClean="${chanNameClean%\.}"
+done
+# Replace any forward or back slashes \ /
+chanNameClean="${chanNameClean//\//_}"
+chanNameClean="${chanNameClean//\\/_}"
+# Replace any colons :
+chanNameClean="${chanNameClean//:/}"
+# Replace any stars *
+chanNameClean="${chanNameClean//\*/}"
+# Replace any question marks ?
+chanNameClean="${chanNameClean//\?/}"
+# Replace any quotation marks "
+chanNameClean="${chanNameClean//\"/}"
+# Replace any brackets < >
+chanNameClean="${chanNameClean//</}"
+chanNameClean="${chanNameClean//>/}"
+# Replace any vertical bars |
+chanNameClean="${chanNameClean//\|/}"
+# Condense any instances of '_-_'
+while [[ "${chanNameClean}" =~ .*"_-_".* ]]; do
+    chanNameClean="${chanNameClean//_-_/ - }"
+done
+# Condense any multiple spaces
+while [[ "${chanNameClean}" =~ .*"  ".* ]]; do
+    chanNameClean="${chanNameClean//  / }"
+done
+if [[ -z "${chanNameClean}" ]]; then
+    printOutput "1" "Channel clean name returned blank result [${vidTitle}]"
+    return 1
+fi
+printOutput "5" "Channel clean name [${chanNameClean}]"
+
+# Get the channel creation date
+chanDate="$(yq -p json ".items[0].snippet.publishedAt" <<<"${curlOutput}")"
+# Convert the date to a Unix timestamp
+chanEpochDate="$(date --date="${chanDate}" "+%s")"
+if ! [[ "${chanEpochDate}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Unable to convert creation date to unix epoch timestamp [${chanDate}][${chanEpochDate}] for channel ID [${1}] -- Skipping"
+    return 1
+fi
+printOutput "5" "Channel creation date [${chanDate}] with epoch date [${chanEpochDate}]"
+
+# Get the channel sub count
+chanSubs="$(yq -p json ".items[0].statistics.subscriberCount" <<<"${curlOutput}")"
+if [[ "${chanSubs}" == "null" ]]; then
+    chanSubs="0"
+elif ! [[ "${chanSubs}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Invalid subscriber count returned [${chanSubs}] for channel ID [${1}] -- Skipping"
+    return 1
+fi
+if [[ "${chanSubs}" -ge "1000" ]]; then
+    chanSubs="$(printf "%'d" "${chanSubs}")"
+fi
+printOutput "5" "Channel sub count [${chanSubs}]"
+
+# Get the channel country
+chanCountry="$(yq -p json ".items[0].snippet.country" <<<"${curlOutput}")"
+if [[ "${chanCountry}" == "null" ]]; then
+    chanCountry="an unknown country"
+else
+    # Safety check is done within this function
+    if ! getChannelCountry "${chanCountry}"; then
+        printOutput "1" "Unknown country code [${chanCountry}] for channel ID [${1}] -- Skipping";
+        return 1
+    fi
+fi
+printOutput "5" "Channel country [${chanCountry}]"
+
+# Get the channel custom URL
+chanUrl="$(yq -p json ".items[0].snippet.customUrl" <<<"${curlOutput}")"
+if [[ -z "${chanUrl}" ]]; then
+    ### SKIP CONDITION
+    printOutput "1" "No custom URL returned for channel ID [${1}] -- Skipping"
+    return 1
+fi
+chanUrl="https://www.youtube.com/${chanUrl}"
+printOutput "5" "Channel custom URL [${chanUrl}]"
+
+# Get the channel video count
+chanVids="$(yq -p json ".items[0].statistics.videoCount" <<<"${curlOutput}")"
+if [[ "${chanVids}" == "null" ]]; then
+    chanVids="0"
+elif ! [[ "${chanVids}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Invalid video count returned [${chanVids}] for channel ID [${1}] -- Skipping"
+    return 1
+fi
+if [[ "${chanVids}" -ge "1000" ]]; then
+    chanVids="$(printf "%'d" "${chanVids}")"
+fi
+printOutput "5" "Channel video count [${chanVids}]"
+
+# Get the channel view count
+chanViews="$(yq -p json ".items[0].statistics.viewCount" <<<"${curlOutput}")"
+if [[ "${chanViews}" == "null" ]]; then
+    chanViews="0"
+elif ! [[ "${chanViews}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Invalid view count returned [${chanViews}] for channel ID [${1}] -- Skipping"
+    return 1
+fi
+if [[ "${chanViews}" -ge "1000" ]]; then
+    chanViews="$(printf "%'d" "${chanViews}")"
+fi
+printOutput "5" "Channel view count [${chanViews}]"
+
+# Get the channel description
+chanDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
+if [[ -z "${chanDesc}" || "${chanDesc}" == "null" ]]; then
+    # No channel description set
+    printOutput "5" "No channel description set"
+    chanDesc="${chanUrl}${lineBreak}${chanSubs} subscribers${lineBreak}${chanVids} videos${lineBreak}${chanViews} views${lineBreak}Joined YouTube $(date --date="@${chanEpochDate}" "+%b. %d, %Y")${lineBreak}Based in ${chanCountry}${lineBreak}Channel description and statistics last updated $(date)"
+else
+    printOutput "5" "Channel description found [${#chanDesc} characters]"
+    chanDesc="${chanDesc}${lineBreak}-----${lineBreak}${chanUrl}${lineBreak}${chanSubs} subscribers${lineBreak}${chanVids} videos${lineBreak}${chanViews} views${lineBreak}Joined YouTube $(date --date="@${chanEpochDate}" "+%b. %d, %Y")${lineBreak}Based in ${chanCountry}${lineBreak}Channel description and statistics last updated $(date)"
+fi
+
+# Define our video path
+chanPathClean="${chanNameClean} [${1}]"
+printOutput "5" "Channel output path [${chanPathClean}]"
+
+# Extract the URL for the channel image, if one exists
+chanImage="$(yq -p json ".items[0].snippet.thumbnails | to_entries | sort_by(.value.height) | reverse | .0 | .value.url" <<<"${curlOutput}")"
+printOutput "5" "Channel image URL [${chanImage}]"
+
+# Extract the URL for the channel background, if one exists
+chanBanner="$(yq -p json ".items[0].brandingSettings.image.bannerExternalUrl" <<<"${curlOutput}")"
+# If we have a banner, crop it correctly
+if [[ -n "${chanBanner}" && ! "${chanBanner}" == "null" ]]; then
+    chanBanner="${chanBanner}=w2560-fcrop64=1,00005a57ffffa5a8-k-c0xffffffff-no-nd-rj"
+    printOutput "5" "No channel banner set"
+else
+    unset chanBanner
+    printOutput "5" "Channel banner found"
+fi
+
+dbCount="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+if [[ "${dbCount}" -eq "0" ]]; then
+    # Insert it into the database
+    if sqDb "INSERT INTO source_channels (ID, UPDATED) VALUES ('${1//\'/\'\'}', $(date +%s));"; then
+        printOutput "3" "Added channel ID [${1}] to database"
+    else
+        badExit "20" "Adding channel ID [${1}] to database failed"
+    fi
+elif [[ "${dbCount}" -eq "1" ]]; then
+    # Exists as a safety check
+    true
+else
+    # PANIC
+    badExit "21" "Multiple matches found for channel ID [${1}] -- Possible database corruption"
+fi
+
+# Set the channel name
+if sqDb "UPDATE source_channels SET NAME = '${chanName//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel name [${chanName}] for channel ID [${1}] in database"
+else
+    badExit "22" "Updating channel name [${chanName}] for channel ID [${1}] in database failed"
+fi
+
+
+# Set the channel clean name
+if sqDb "UPDATE source_channels SET NAME_CLEAN = '${chanNameClean//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel clean name [${chanNameClean}] for channel ID [${1}] in database"
+else
+    badExit "23" "Updating channel clean name [${chanNameClean}] for channel ID [${1}] in database failed"
+fi
+
+# Set the timestamp
+if sqDb "UPDATE source_channels SET TIMESTAMP = ${chanEpochDate}, UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated timestamp [${chanEpochDate}] for channel ID [${1}] in database"
+else
+    badExit "24" "Updating timestamp [${chanEpochDate}] for channel ID [${1}] in database failed"
+fi
+
+# Set the subscriber count
+if sqDb "UPDATE source_channels SET SUB_COUNT = ${chanSubs//,/}, UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated subscriber count [${chanSubs}] for channel ID [${1}] in database"
+else
+    badExit "25" "Updating subscriber count [${chanSubs}] for channel ID [${1}] in database failed"
+fi
+
+# Set the channel country
+if sqDb "UPDATE source_channels SET COUNTRY = '${chanCountry//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated country [${chanCountry}] for channel ID [${1}] in database"
+else
+    badExit "26" "Updating country [${chanCountry}] for channel ID [${1}] in database failed"
+fi
+
+# Set the channel URL
+if sqDb "UPDATE source_channels SET URL = '${chanUrl//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated URL [${chanUrl}] for channel ID [${1}] in database"
+else
+    badExit "27" "Updating URL [${chanUrl}] for channel ID [${1}] in database failed"
+fi
+
+# Set the video count
+if sqDb "UPDATE source_channels SET VID_COUNT = ${chanVids//,/}, UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated video count [${chanVids}] for channel ID [${1}] in database"
+else
+    badExit "28" "Updating video count [${chanVids}] for channel ID [${1}] in database failed"
+fi
+
+# Set the view count
+if sqDb "UPDATE source_channels SET VIEW_COUNT = ${chanViews//,/}, UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated view count [${chanViews}] for channel ID [${1}] in database"
+else
+    badExit "29" "Updating view count [${chanViews}] for channel ID [${1}] in database failed"
+fi
+
+# Set the channel description
+if sqDb "UPDATE source_channels SET DESC = '${chanDesc//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel description [${#chanDesc} characters] for channel ID [${1}] in database"
+else
+    badExit "30" "Updating channel description [${#chanDesc} characters] for channel ID [${1}] in database failed"
+fi
+
+# Set the channel path
+if sqDb "UPDATE source_channels SET PATH = '${chanPathClean//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel path [${chanPathClean}] for channel ID [${1}] in database"
+else
+    badExit "31" "Updating channel path [${chanPathClean}] for channel ID [${1}] in database failed"
+fi
+
+# Set the channel image
+if sqDb "UPDATE source_channels SET IMAGE = '${chanImage//\'/\'\'}', UPDATED = $(date +%s) WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated channel image [${chanImage}] for channel ID [${1}] in database"
+else
+    badExit "32" "Updating channel image [${chanImage}] for channel ID [${1}] in database failed"
+fi
+
+# If we have a channel banner, add that
+if [[ -n "${chanBanner}" && ! "${chanBanner}" == "null" ]]; then
+    if sqDb "UPDATE source_channels SET BANNER = '${chanBanner}' WHERE ID = '${1//\'/\'\'}';"; then
+        printOutput "5" "Appended channel banner to database entry for channel ID [${1}]"
+    else
+        badExit "33" "Unable to append channel banner to database entry for channel ID [${1}]"
+    fi
+fi
+}
+
+function getPlaylistInfo {
+# Playlist ID should be passed as ${1}
+unset plVis plTitle plDesc plImage
+# Get the necessary information
+ytApiCall "playlists?id=${1}&part=id,snippet"
+apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
+# Validate it
+if [[ -z "${apiResults}" ]]; then
+    printOutput "1" "No data provided to validate integer"
+    return 1
+elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+    # Expected outcome
+    true
+elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Data [${apiResults}] failed to validate as an integer"
+    return 1
+else
+    badExit "34" "Impossible condition"
+fi
+
+if [[ "${apiResults}" -eq "0" ]]; then
+    printOutput "2" "API lookup for playlist parsing returned zero results (Is the playlist private?)"
+
+    if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+        printOutput "3" "Re-attempting playlist lookup via yt-dlp + cookie"
+        dlpApiCall="$(yt-dlp --no-warnings -J --playlist-items 0 --cookies "${cookieFile}" "https://www.youtube.com/playlist?list=${1}" 2>/dev/null)"
+        #throttleDlp
+        
+        if [[ "$(yq -p json ".availability" <<<"${dlpApiCall}")" == "private" ]]; then
+            # Yes, it's a private playlist we can auth via cookie
+            plVis="private"
+            printOutput "3" "Lookup via cookie auth successful"
+            plTitle="$(yq -p json ".title" <<<"${dlpApiCall}")"
+            plDesc="$(yq -p json ".description" <<<"${dlpApiCall}")"
+            plImage="$(yq -p json ".thumbnails[0].url" <<<"${dlpApiCall}")"
+            plImage="${plImage%\?*}"
+        else
+            printOutput "1" "Unable to preform lookup on playlist ID [${1}] via yt-dlp -- Skipping"
+            return 1
+        fi
+    else
+        printOutput "1" "API lookup failed, and no cookie file provided to attempt to lookup playlist ID [${1}] via yt-dlp -- Skipping"
+        return 1
+    fi
+elif [[ "${apiResults}" -eq "1" ]]; then
+    plVis="public"
+    plTitle="$(yq -p json ".items[0].snippet.title" <<<"${curlOutput}")"
+    plDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
+    plImage="$(yq -p json ".items[0].snippet.thumbnails | to_entries | sort_by(.value.height) | reverse | .0 | .value.url" <<<"${curlOutput}")"
+else
+    badExit "35" "Impossible condition"
+fi
+
+if [[ -z "${plTitle}" ]]; then
+    printOutput "1" "Unable to find title for playlist [${1}]"
+    return 1
+fi
+if [[ -z "${plImage}" ]]; then
+    printOutput "1" "Unable to find image for playlist [${1}]"
+    return 1
+fi
+
+# Returns variables:
+# plVis
+# plTitle
+# plDesc (May be blank)
+# plImage
+}
+
+function playlistToDb {
+# Pass the playlist ID as ${1}
+# Get the playlist info
+if ! getPlaylistInfo "${1}"; then
+    printOutput "1" "Failed to retrieve playlist info for [${1}] -- Skipping source"
+    continue
+fi
+# Do we already know of this playlist?
+dbCount="$(sqDb "SELECT COUNT(1) FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
+if [[ "${dbCount}" -eq "0" ]]; then
+    # Nope. Add it to the database.
+    if sqDb "INSERT INTO source_playlists (ID, UPDATED) VALUES ('${1//\'/\'\'}', $(date +%s));"; then
+        printOutput "3" "Added playlist ID [${1}] to database"
+    else
+        badExit "36" "Failed to add playlist ID [${1}] to database"
+    fi
+elif [[ "${dbCount}" -eq "1" ]]; then
+    # Safety check
+    true
+else
+    badExit "37" "Counted [${dbCount}] instances of playlist ID [${1}] in database -- Possible database corruption"
+fi
+
+# Update the visibility
+if sqDb "UPDATE source_playlists SET VISIBILITY = '${plVis//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated visibility for playlist ID [${1}]"
+else
+    printOutput "1" "Failed to update visibility for playlist ID [${1}]"
+fi
+
+# Update the title
+if sqDb "UPDATE source_playlists SET TITLE = '${plTitle//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated title for playlist ID [${1}]"
+else
+    printOutput "1" "Failed to update title for playlist ID [${1}]"
+fi
+
+# Update the title
+if [[ -n "${plDesc}" ]]; then
+    if sqDb "UPDATE source_playlists SET DESC = '${plDesc//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+        printOutput "5" "Updated description for playlist ID [${1}]"
+    else
+        printOutput "1" "Failed to description title for playlist ID [${1}]"
+    fi 
+fi
+
+# Update the image
+if sqDb "UPDATE source_playlists SET IMAGE = '${plImage//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated image for playlist ID [${1}]"
+else
+    printOutput "1" "Failed to update image for playlist ID [${1}]"
+fi
+}
+
+function verifyChannelName {
+# Channel ID is ${1}
+# Retrieved channel name is ${2}
+# Is it already marked as safe?
+if [[ -z "${verifiedArr["${1}"]}" ]]; then
+    # No we have not
+    # Have we previously indexed this channel?
+    dbCount="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+    if [[ "${dbCount}" -eq "0" ]]; then
+        # Safety check
+        verifiedArr["${1}"]="true"
+    elif [[ "${dbCount}" -eq "1" ]]; then
+        dbChanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+        if [[ "${2}" == "${dbChanName}" ]]; then
+            printOutput "5" "Verified channel name is unchanged"
+        else
+            printOutput "1" "Channel ID [${1}] appears to have changed channel names from [${dbChanName}] to [${2}] -- Updating existing source"
+            
+            # Get a list of our affected (currently downloaded items)
+            unset moveArr
+            declare -A moveArr
+            while read -r tmpId; do
+                # Record their watch status
+                if ! getWatchStatus "${tmpId}"; then
+                    printOutput "1" "Failed to get watch status for file ID [${tmpId}]"
+                fi
+                # Get the existing channelPath, vidYear, channelNameClean, vidIndex, vidTitleClean
+                tmpChannelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+                tmpChannelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+                tmpVidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                tmpVidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                tmpVidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                # Add the affected files to our moveArr so we can move them
+                if [[ -e "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].mp4" ]]; then
+                    moveArr["_${tmpId}"]="Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].mp4"
+                else
+                    printOutput "1" "File ID [${tmpId}] is marked as downloaded, but does not appear to exist on file system at expected path [${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].mp4]"
+                fi
+            done < <(sqDb "SELECT id FROM source_videos WHERE CHANNEL_ID = '${1//\'/\'\'}' AND STATUS = 'downloaded';")
+            
+            # Now update the channel information in the database
+            channelToDb "${1}"
+            
+            # We're good to move our files
+            # Get our new channel path
+            channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+            # Move our base directory
+            # Move the video and thumbail of each video in the base directory
+            # Check if the base channel directory exists
+            if [[ -d "${outputDir}/${channelPath}" ]]; then
+                badExit "38" "Directory [${outputDir}/${channelPath}] already exists, unable to update [${outputDir}/${tmpChannelPath}]"
+            else
+                # Move it
+                if ! mv "${outputDir}/${tmpChannelPath}" "${outputDir}/${channelPath}"; then
+                    badExit "39" "Failed to move old directory [${outputDir}/${tmpChannelPath}] to new directory [${outputDir}/${channelPath}]"
+                fi
+                # Create the series image
+                makeShowImage "${1}"
+                
+                # For each season, re-create the season image
+                while read -r tmpVidYear; do
+                    makeSeasonImage "${1}" "${tmpVidYear}"
+                done < <(sqDb "SELECT DISTINCT YEAR FROM source_videos WHERE CHANNEL_ID = '${1//\'/\'\'}' AND STATUS = 'downloaded';")
+            fi
+            
+            # Move the individual videos, and their thumbnails
+            for tmpId in "${!moveArr[@]}"; do
+                tmpId="${tmpId#_}"
+                tmpChannelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+                tmpChannelName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+                tmpChannelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+                tmpVidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                tmpVidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                tmpVidTitle="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                tmpVidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${tmpId//\'/\'\'}';")"
+                # Check to see if the season folder exists
+                if ! [[ -d "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}" ]]; then
+                    # Create it
+                    if ! mkdir -p "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}"; then
+                        badExit "40" "Unable to create directory [${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}]"
+                    fi
+                fi
+                
+                # Move our file
+                if ! mv "${outputDir}/${tmpChannelPath}/${moveArr[_${tmpId}]}" "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].mp4"; then
+                    printOutput "1" "Failed to move file ID [${tmpId}] to destination [${tmpChannelPath}/Season ${tmpVidYear}]"
+                fi
+                
+                # If we have a thumbnail
+                if [[ -e "${outputDir}/${tmpChannelPath}/${moveArr[_${tmpId}]%mp4}jpg" ]]; then
+                    # Move it
+                    if ! mv "${outputDir}/${tmpChannelPath}/${moveArr[_${tmpId}]%mp4}jpg" "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].jpg"; then
+                        printOutput "1" "Failed to move thumbnail for file ID [${tmpId}] to destination [${tmpChannelPath}/Season ${tmpVidYear}]"
+                    fi
+                fi
+                if ! [[ -e "${outputDir}/${tmpChannelPath}/${moveArr[_${tmpId}]%mp4}jpg" ]]; then
+                    # Still don't have one, so get it from web
+                    printOutput "5" "Pulling thumbail from web"
+                    callCurlDownload "https://img.youtube.com/vi/${tmpId}/maxresdefault.jpg" "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].jpg"
+                    if ! [[ -e "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].jpg" ]]; then
+                        printOutput "1" "Failed to get thumbnail for file ID [${tmpId}]"
+                    fi
+                fi
+
+                if [[ -e "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}/${tmpChannelNameClean} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitleClean} [${tmpId}].mp4" ]]; then
+                    printOutput "3" "Imported video [${tmpChannelName} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitle}]"
+                else
+                    printOutput "1" "Failed to import [${tmpChannelName} - S${tmpVidYear}E$(printf '%03d' "${tmpVidIndex}") - ${tmpVidTitle}]"
+                fi
+            done
+            
+            # Get the rating key of the old series
+            seriesRatingKey="$(sqDb "SELECT RATING_KEY FROM rating_key WHERE ID = '${1//\'/\'\'}';")"
+            
+            # Remove the old series
+            callCurlDelete "${plexAdd}/library/metadata/${seriesRatingKey}?&X-Plex-Token=${plexToken}"
+            
+            # Issue a library refresh
+            refreshSleep="$(( ${#moveArr[@]} * 3 ))"
+            if [[ "${refreshSleep}" -lt "30" ]]; then
+                refreshSleep="30"
+            elif [[ "${refreshSleep}" -gt "300" ]]; then
+                refreshSleep="300"
+            fi
+            refreshLibrary "${libraryId}"
+            printOutput "3" "Sleeping for [${refreshSleep}] seconds to give the Plex Scanner time to work"
+            sleep "${refreshSleep}"
+
+            # Search the PMS library for the rating key of the series
+            # This will also save the rating key to the database (Set series rating key)
+            setSeriesRatingKey "${1}"
+            # We now have ${showRatingKey} set
+            
+            # Update the series metadata
+            setSeriesMetadata "${showRatingKey}"
+            
+            # Fix the watch status for the series
+            for tmpId in "${!moveArr[@]}"; do
+                if ! setWatchStatus "${tmpId#_}"; then
+                    printOutput "1" "Unable to update watch status for file ID [${tmpId#_}]"
+                fi
+            done
+            
+            # Move on with life
+        fi
+        verifiedArr["${1}"]="true"
+    else
+        badExit "41" "Counted [${dbCount}] instances of channel ID [${1}] -- Possible database corruption"
+    fi
+fi
+}
+
+## Plex functions
+function refreshLibrary {
+# Issue a "Scan Library" command -- The desired library ID must be passed as ${1}
+if [[ -z "${1}" ]]; then
+    badExit "42" "No library ID passed to be scanned"
+fi
+printOutput "3" "Issuing a 'Scan Library' command to Plex for library ID [${1}]"
+callCurlGet "${plexAdd}/library/sections/${1}/refresh?X-Plex-Token=${plexToken}"
+}
+
+function setSeriesRatingKey {
+lookupTime="$(($(date +%s%N)/1000000))"
+# Channel ID should be passed as ${1}
+if [[ -z "${1}" ]]; then
+    badExit "43" "No channel ID passed for series rating key update"
+fi
+chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${1//\'/\'\'}';")"
+printOutput "3" "Retrieving rating key from Plex for show [${chanName}] with channel ID [${1}]"
+# Can we take the easy way out? Try to match the series by name
+lookupMatch="0"
+# Get a list of all the series in the video library
+callCurlGet "${plexAdd}/library/sections/${libraryId}/all?X-Plex-Token=${plexToken}"
+
+# Load the rating keys into an associative array, with the show title as the key and the rating key as the value
+unset ratingKeyArr
+declare -A ratingKeyArr
+while read -r ratingKey seriesTitle; do
+    printOutput "5" "Assigning value [${ratingKey}] for key [${seriesTitle,,}]"
+    ratingKeyArr["${seriesTitle,,}"]="${ratingKey}"
+done < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | (.\"+@ratingKey\" + \" \" + .\"+@title\")" <<<"${curlOutput}")
+
+# See if we can flatly match any of these via ${chanName}
+if [[ -n "${ratingKeyArr[${chanName,,}]}" ]]; then
+    showRatingKey="${ratingKeyArr[${chanName,,}]}"
+    # We could!
+    printOutput "4" "Located series rating key [${showRatingKey}] via most efficient lookup method [Took $(timeDiff "${lookupTime}")]"
+    dbCount="$(sqDb "SELECT COUNT(1) FROM rating_key WHERE CHANNEL_ID = '${1//\'/\'\'}';")"
+    if [[ "${dbCount}" -eq "0" ]]; then
+        # Doesn't exist, insert it
+        if sqDb "INSERT INTO rating_key (CHANNEL_ID, RATING_KEY, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, $(date +%s));"; then
+            printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
+        else
+            badExit "44" "Added series rating key [${showRatingKey}] to database failed"
+        fi
+    elif [[ "${dbCount}" -eq "1" ]]; then
+        # Exists, update it
+        if ! sqDb "UPDATE rating_key SET RATING_KEY = '${showRatingKey}', UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
+            badExit "45" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+        fi
+    else
+        badExit "46" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+    fi
+    lookupMatch="1"
+else
+    # We could not
+    # Best way would be the first episode of the first season of the channel ID in question
+    firstEpisode="$(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${1//\'/\'\'}' ORDER BY TIMESTAMP ASC LIMIT 1;")"
+    # Having the year would help as we can skip series which do not have the first year season we want
+    firstYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${firstEpisode}';")"
+    # To do this, we need to find a matching episode by YT ID in Plex
+    # The "lazy" way to do this is to only compare items which have the same first character as our channel name
+    
+    chanNameLower="${chanName,,}"
+    for seriesTitle in "${!ratingKeyArr[@]}"; do
+        # If the first letter matches
+        if [[ "${seriesTitle:0:1}" == "${chanNameLower:0:1}" ]]; then
+            # See if we have a matching year for that series
+            showRatingKey="${ratingKeyArr[${seriesTitle}]}"
+            if [[ -z "${showRatingKey}" ]]; then
+                printOutput "1" "No data provided to validate integer"
+                return 1
+            elif [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
+                # Expected outcome
+                true
+            elif ! [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
+                printOutput "1" "Data [${showRatingKey}] failed to validate as an integer"
+                return 1
+            else
+                badExit "47" "Impossible condition"
+            fi
+            
+            # Get the rating key of a season that matches our video year
+            callCurlGet "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
+            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
+            if [[ -z "${seasonRatingKey}" ]]; then
+                printOutput "4" "No matching season with year [${firstYear}] found for series [${seriesTitle}] via series rating key [${showRatingKey}], skipping series"
+                # We can unset this as we know it's not what we're looking for, and removing it now will make any inefficient search slightly more efficient
+                unset ratingKeyArr["${seriesTitle}"]
+                continue
+            elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
+                # Expected outcome
+                true
+            elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
+                printOutput "1" "Data [${seasonRatingKey}] failed to validate as an integer"
+                return 1
+            else
+                badExit "48" "Impossible condition"
+            fi
+            
+            if [[ -n "${seasonRatingKey}" ]]; then
+                # Get the episode list for the season
+                callCurlGet "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
+                # Get the YT ID from the file path of the first episode of the first season
+                firstEpisodeId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
+                firstEpisodeId="${firstEpisodeId%\]\.*}"
+                firstEpisodeId="${firstEpisodeId##*\[}"
+                if [[ -z "${firstEpisodeId}" ]]; then
+                    badExit "49" "Failed to isolate ID for first episode of [${plexTitleArr[${z}]}] season [${firstYear}] -- Incorrect file name scheme?"
+                fi
+                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and hope for a match.
+                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
+                    # We've matched!
+                    printOutput "4" "Located series rating key [${showRatingKey}] via semi-efficient lookup method [Took $(timeDiff "${lookupTime}")]"
+
+                    # Add the series rating key to the database
+                    dbCount="$(sqDb "SELECT COUNT(1) FROM rating_key WHERE CHANNEL_ID = '${1//\'/\'\'}';")"
+                    if [[ "${dbCount}" -eq "0" ]]; then
+                        # Doesn't exist, insert it
+                        if sqDb "INSERT INTO rating_key (CHANNEL_ID, RATING_KEY, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, $(date +%s));"; then
+                            printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
+                        else
+                            badExit "50" "Added series rating key [${showRatingKey}] to database failed"
+                        fi
+                    elif [[ "${dbCount}" -eq "1" ]]; then
+                        # Exists, update it
+                        if ! sqDb "UPDATE rating_key SET RATING_KEY = '${showRatingKey}', UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
+                            badExit "51" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+                        fi
+                    else
+                        badExit "52" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                    fi
+                    lookupMatch="1"
+
+                    # Break the loop
+                    break
+                else
+                    printOutput "4" "No matching episode with file ID [${firstEpisode}] detected for series rating key [${showRatingKey}] with season rating key [${seasonRatingKey}]"
+                    # We can unset this as we know it's not what we're looking for, and removing it now will make any inefficient search slightly more efficient
+                    unset ratingKeyArr["${seriesTitle}"]
+                fi
+            fi
+        fi
+    done
+
+    # If we've gotten this far, and not matched anything, we should do an inefficient search with the leftover titles from the ratingKeyArr[@]
+    if [[ "${lookupMatch}" -eq "0" ]]; then
+        for showRatingKey in "${ratingKeyArr[@]}"; do
+            # Get the rating key of a season that matches our video year
+            callCurlGet "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
+            seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${firstYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
+            if [[ -n "${seasonRatingKey}" ]]; then
+                printOutput "5" "Retrieved season rating key [${seasonRatingKey}]"
+                callCurlGet "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
+                # Get the YT ID from the file path of the first episode of the first season
+                firstEpisodeId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@index\" == \"1\" ) | .Media.Part.\"+@file\"" <<<"${curlOutput}")"
+                firstEpisodeId="${firstEpisodeId%\]\.*}"
+                firstEpisodeId="${firstEpisodeId##*\[}"
+                # We have now extracted the ID of the first episode of the first season. Compare it to ours, and pray for a match.
+                if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
+                    printOutput "4" "Located series rating key [${showRatingKey}] via least efficient lookup method [Took $(timeDiff "${lookupTime}")]"
+
+                    # Add the series rating key to the database
+                    dbCount="$(sqDb "SELECT COUNT(1) FROM rating_key WHERE CHANNEL_ID = '${1//\'/\'\'}';")"
+                    if [[ "${dbCount}" -eq "0" ]]; then
+                        # Doesn't exist, insert it
+                        if sqDb "INSERT INTO rating_key (CHANNEL_ID, RATING_KEY, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, $(date +%s));"; then
+                            printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
+                        else
+                            badExit "53" "Added series rating key [${showRatingKey}] to database failed"
+                        fi
+                    elif [[ "${dbCount}" -eq "1" ]]; then
+                        # Exists, update it
+                        if ! sqDb "UPDATE rating_key SET RATING_KEY = '${showRatingKey}', UPDATED = $(date +%s) WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
+                            badExit "54" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+                        fi
+                    else
+                        badExit "55" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                    fi
+                    lookupMatch="1"
+                    
+                    # Break the loop
+                    break
+                fi
+            else
+                printOutput "5" "No seasons matching year [${firstYear}] found for series rating key [${showRatingKey}] -- Skipping series"
+            fi
+        done
+    fi
+
+    if [[ "${lookupMatch}" -eq "0" ]]; then
+        printOutput "1" "Unable to locate rating key for series [${chanName}] -- Is Plex aware of the series?"
+        return 1
+    fi
+fi
+}
+
+function setSeriesMetadata {
+printOutput "3" "Setting series metadata for channel ID [${1}]"
+
+# Get the channel ID from the rating key
+channelId="$(sqDb "SELECT CHANNEL_ID FROM rating_key WHERE RATING_KEY = ${1};")"
+
+# Get the channel name
+showName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
+if [[ -z "${showName}" ]]; then
+    printOutput "1" "Unable to retrieve series name for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+    return 1
+fi
+# Encode it
+showNameEncoded="$(rawUrlEncode "${showName}")"
+if [[ -z "${showNameEncoded}" ]]; then
+    printOutput "1" "Unable to encode series name [${showName}] for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+    return 1
+fi
+
+# Get and encode the channel description
+showDesc="$(sqDb "SELECT DESC FROM source_channels WHERE ID = '${channelId}';")"
+if [[ -z "${showDesc}" ]]; then
+    printOutput "1" "Unable to retrieve series description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+    return 1
+fi
+# Encode it
+showDescEncoded="$(rawUrlEncode "${showDesc}")"
+if [[ -z "${showDescEncoded}" ]]; then
+    printOutput "1" "Unable to encode series description for channel ID [${channelId}], unable to update Plex metadata -- Skipping"
+    return 1
+fi
+
+# Get the channel creation date
+showCreation="$(sqDb "SELECT TIMESTAMP FROM source_channels WHERE ID = '${channelId}';")"
+# Validate it
+if [[ -z "${showCreation}" ]]; then
+    printOutput "1" "No data provided to validate integer"
+    return 1
+elif [[ "${showCreation}" =~ ^[0-9]+$ ]]; then
+    # Expected outcome
+    true
+elif ! [[ "${showCreation}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Data [${showCreation}] failed to validate as an integer"
+    return 1
+else
+    badExit "56" "Impossible condition"
+fi
+# Convert it to YYYY-MM-DD
+showCreation="$(date --date="@${showCreation}" "+%Y-%m-%d")"
+
+if callCurlPut "${plexAdd}/library/sections/${libraryId}/all?type=2&id=${1}&includeExternalMedia=1&title.value=${showNameEncoded}&titleSort.value=${showNameEncoded}&summary.value=${showDescEncoded}&studio.value=YouTube&originallyAvailableAt.value=${showCreation}&title.locked=1&titleSort.locked=1&originallyAvailableAt.locked=1&studio.locked=1&summary.locked=1&X-Plex-Token=${plexToken}"; then
+    printOutput "4" "Metadata for series [${showName}] sucessfully updated"
+else
+    printOutput "1" "Metadata for series [${showName}] failed"
+fi
+}
+
+function setWatchStatus {
+if [[ -z "${1}" ]]; then
+    printOutput "1" "Pass a file ID to update the watch status for"
+    return 1
+fi
+
+# Get its rating key
+if ! getFileRatingKey "${1}"; then
+    printOutput "1" "Failed to retrieve rating key for file ID [${1}]"
+    return 1
+fi
+
+printOutput "3" "Correcting watch status for file ID [${1}]" 
+if [[ "${watchedArr[_${1}]}" == "watched" ]]; then
+    # Issue the call to mark the item as watched
+    printOutput "4" "Marking file ID [${1}] as watched"
+    if callCurlGet "${plexAdd}/:/scrobble?identifier=com.plexapp.plugins.library&key=${ratingKey}&X-Plex-Token=${plexToken}"; then
+        printOutput "5" "Successfully marked file ID [${1}] as watched"
+        unset watchedArr["_${1}"]
+    else
+        printOutput "1" "Failed to mark file ID [${1}] as watched via rating key [${ratingKey}]"
+    fi
+elif [[ "${watchedArr[_${1}]}" == "unwatched" ]]; then
+    # Issue the call to mark the item as unwatched
+    printOutput "4" "Marking file ID [${1}] as unwatched"
+    if callCurlGet "${plexAdd}/:/unscrobble?identifier=com.plexapp.plugins.library&key=${ratingKey}&X-Plex-Token=${plexToken}"; then
+        printOutput "5" "Successfully marked file ID [${1}] as unwatched"
+        unset watchedArr["_${1}"]
+    else
+        printOutput "1" "Failed to mark file ID [${1}] as unwatched via rating key [${ratingKey}]"
+    fi
+elif [[ "${watchedArr[_${1}]}" =~ ^[0-9]+$ ]]; then
+    # Issue the call to mark the item as partially watched
+    printOutput "4" "Marking file ID [${1}] as partially watched watched [$(msToTime "${watchedArr[_${1}]}")]"
+    if callCurlPut "${plexAdd}/:/progress?key=${ratingKey}&identifier=com.plexapp.plugins.library&time=${watchedArr[_${1}]}&state=stopped&X-Plex-Token=${plexToken}"; then
+        printOutput "5" "Successfully marked file ID [${1}] as partially watched [$(msToTime "${watchedArr[_${1}]}")]"
+        unset watchedArr["_${1}"]
+    else
+        printOutput "1" "Failed to mark file ID [${1}] as partially watched [${watchedArr[_${1}]}|$(msToTime "${watchedArr[_${1}]}")] via rating key [${ratingKey}]"
+    fi
+else
+    badExit "57" "Unexpected watch status for [${1}]: ${watchedArr[_${1}]}"
+fi
+}
+
+function getFileRatingKey {
+local lookupTime
+lookupTime="$(($(date +%s%N)/1000000))"
+# File ID should be passed as ${1}
+if [[ -z "${1}" ]]; then
+    printOutput "1" "Pass file ID to getFileRatingKey function"
+    return 1
+fi
+
+# Get the channel ID of our file ID
+local channelId
+channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+if [[ -z "${channelId}" ]]; then
+    printOutput "1" "Unable to retrieve channel ID for file ID [${1}] -- Possible database corruption"
+    return 1
+fi
+
+# Get the rating key for this series
+local showRatingKey
+showRatingKey="$(sqDb "SELECT RATING_KEY FROM rating_key WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
+if [[ -z "${showRatingKey}" ]]; then
+    if ! setSeriesRatingKey "${channelId}"; then
+        printOutput "1" "Failed to set series rating key for channel ID [${channelId}]"
+        return 1
+    fi
+    # If we've gotten this far, we still have ${showRatingKey} defined from the setSeriesRatingKey function
+fi
+
+# Get the year for the file ID
+local vidYear
+vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${1//\'/\'\'}';")"
+if [[ -z "${vidYear}" ]]; then
+    badExit "58" "Failed to retrieve year for file ID [${1}] -- Possible database corruption"
+fi
+
+# Get the rating key for the season matching the year
+callCurlGet "${plexAdd}/library/metadata/${showRatingKey}/children?X-Plex-Token=${plexToken}"
+seasonRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@index\" == \"${vidYear}\" ) | .\"+@ratingKey\"" <<<"${curlOutput}")"
+if [[ -z "${seasonRatingKey}" ]]; then
+    printOutput "1" "No matching season with year [${vidYear}] found for channel ID [${channelId}]"
+    return 1
+elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
+    # Expected outcome
+    true
+elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
+    printOutput "1" "Data [${seasonRatingKey}] failed to validate as an integer"
+    return 1
+else
+    badExit "59" "Impossible condition"
+fi
+
+# Get the episode list for the season
+callCurlGet "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
+
+while read -r ratingKey fileId; do
+    fileId="${fileId%\]\.*}"
+    fileId="${fileId##*\[}"
+    if [[ -z "${fileId}" ]]; then
+        printOutput "1" "Failed to isolate file ID for item rating key [${ratingKey}] of season rating key [${seasonRatingKey}]"
+        return 1
+    fi
+    if [[ "${fileId}" == "${1}" ]]; then
+        # We've matched!
+        printOutput "4" "Located episode rating key [${ratingKey}] for file ID [${1}] [Took $(timeDiff "${lookupTime}")]"
+
+        # Break the loop
+        break
+    fi
+done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | (.\"+@ratingKey\" + \" \" + .Media.Part.\"+@file\")" <<<"${curlOutput}")
+}
+
+function getWatchStatus {
+if [[ -z "${1}" ]]; then
+    printOutput "1" "Pass file ID to getWatchStatus function"
+    return 1
+fi
+# if [[ -n "${watchedArr[_${1}]}" ]]; then
+    # printOutput "5" "Watch status for file ID [${1}] already defined as [${watchedArr[_${1}]}]"
+    # return 0
+# fi
+if ! getFileRatingKey "${1}"; then
+    printOutput "1" "Failed to retrieve rating key for file ID [${1}]"
+fi
+# We now have the file's rating key assigned as ${ratingKey}
+# Now, get the file's watch status from Plex
+callCurlGet "${plexAdd}/library/metadata/${ratingKey}?X-Plex-Token=${plexToken}"
+watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@viewOffset\"" <<<"${curlOutput}")"
+if [[ "${watchStatus}" =~ ^[0-9]+$ ]]; then
+    # It's in progress
+    printOutput "4" "Detected file ID [${1}] as in-progress with view offset [${watchStatus}]"
+    if [[ -z "${watchedArr["_${1}"]}" ]]; then
+        watchedArr["_${1}"]="${watchStatus}"
+    else
+        if [[ "${watchedArr["_${1}"]}" == "${watchStatus}" ]]; then
+            printOutput "5" "File ID [${1}] already marked as [${watchStatus}]"
+        else
+            printAngryWarning
+            printOutput "2" "Attempted to overwrite file ID [${1}] watch status of [${watchedArr["_${1}"]}] with [${watchStatus}]"
+        fi
+    fi
+else
+    # Not in progress, we need to check the view count
+    watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@viewCount\"" <<<"${curlOutput}")"
+    if [[ "${watchStatus}" == "null" ]]; then
+        # It's unwatched
+        printOutput "4" "Detected file ID [${1}] as unwatched"
+        if [[ -z "${watchedArr["_${1}"]}" ]]; then
+            watchedArr["_${1}"]="unwatched"
+        else
+            if [[ "${watchedArr["_${1}"]}" == "unwatched" ]]; then
+                printOutput "5" "File ID [${1}] already marked as [unwatched]"
+            else
+                printAngryWarning
+                printOutput "2" "Attempted to overwrite file ID [${1}] watch status of [${watchedArr["_${1}"]}] with [unwatched]"
+            fi
+        fi
+    else
+        # It's watched
+        printOutput "4" "Detected file ID [${1}] as watched"
+        if [[ -z "${watchedArr["_${1}"]}" ]]; then
+            watchedArr["_${1}"]="watched"
+        else
+            if [[ "${watchedArr["_${1}"]}" == "watched" ]]; then
+                printOutput "5" "File ID [${1}] already marked as [watched]"
+            else
+                printAngryWarning
+                printOutput "2" "Attempted to overwrite file ID [${1}] watch status of [${watchedArr["_${1}"]}] with [watched]"
+            fi
+        fi
+    fi
+fi
+if [[ -z "${watchedArr[_${1}]}" ]]; then
+    printOutput "1" "Unable to detect watch status for file ID [${1}]"
+    return 1
+fi
+# We should now have watchedArr[_${ytId}] defined as 'watched', 'unwatched', or a numerical viewing offset (in progress)
 }
 
 function collectionGetOrder {
@@ -3357,14 +2498,14 @@ if [[ "${2}" == "video" ]]; then
 elif [[ "${2}" == "audio" ]]; then
     fileStr="Track"
 else
-    badExit "153" "Impossible condition"
+    badExit "60" "Impossible condition"
 fi
 
 printOutput "5" "Obtaining order of items in ${2} collection from Plex"
 unset plexCollectionOrder
 # Start our indexing from one, it makes it easier for my smooth brain to debug playlist positioning
 plexCollectionOrder[0]="null"
-callCurl "${plexAdd}/library/collections/${1}/children?X-Plex-Token=${plexToken}"
+callCurlGet "${plexAdd}/library/collections/${1}/children?X-Plex-Token=${plexToken}"
 while read -r ii; do
     if [[ -z "${ii}" || "${ii}" == "null" ]]; then
         printOutput "1" "No items in collection"
@@ -3381,7 +2522,7 @@ for ii in "${!plexCollectionOrder[@]}"; do
 done
 }
 
-function collectionVerifySort {
+function collectionSort {
 # Collection rating key should be passed as ${1}
 # 'audio' or 'video' should be passed as ${2}
 if [[ -z "${1}" ]]; then
@@ -3396,7 +2537,7 @@ collectionGetOrder "${1}" "${2}"
 
 printOutput "3" "Checking for items to be re-ordered in ${2} collection"
 for ii in "${!plexCollectionOrder[@]}"; do
-    # ii = position interger [starts from 1]
+    # ii = position integer [starts from 1]
     # plexCollectionOrder[${ii}] = file ID
     
     assignTitle "${plexCollectionOrder[${ii}]}"
@@ -3405,13 +2546,13 @@ for ii in "${!plexCollectionOrder[@]}"; do
         if ! [[ "${plexCollectionOrder[1]}" == "${dbPlaylistVids[1]}" ]]; then
             printOutput "4" "Moving ${2} file ID [${dbPlaylistVids[1]}] to position 1 [${titleById[_${dbPlaylistVids[1]}]}]"
             if [[ "${2}" == "video" ]]; then
-                getVideoFileRatingKey "${dbPlaylistVids[${ii}]}"
+                getFileRatingKey "${dbPlaylistVids[${ii}]}"
                 urlRatingKey="${videoFileRatingKey[_${dbPlaylistVids[${ii}]}]}"
             elif [[ "${2}" == "audio" ]]; then
                 getAudioFileRatingKey "${dbPlaylistVids[${ii}]}"
                 urlRatingKey="${audioFileRatingKey[_${dbPlaylistVids[${ii}]}]}"
             else
-                badExit "154" "Impossible condition"
+                badExit "61" "Impossible condition"
             fi
             callCurlPut "${plexAdd}/library/collections/${1}/items/${urlRatingKey}/move?X-Plex-Token=${plexToken}"
         fi
@@ -3434,10 +2575,10 @@ for ii in "${!plexCollectionOrder[@]}"; do
             
             if [[ "${2}" == "video" ]]; then
                 # This is the file we want to move
-                getVideoFileRatingKey "${plexCollectionOrder[${ii}]}"
+                getFileRatingKey "${plexCollectionOrder[${ii}]}"
                 urlRatingKey="${videoFileRatingKey[_${plexCollectionOrder[${ii}]}]}"
                 # This is the file it should come after
-                getVideoFileRatingKey "${dbPlaylistVids[${correctPos}]}"
+                getFileRatingKey "${dbPlaylistVids[${correctPos}]}"
                 urlRatingKeyAfter="${videoFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}"
             elif [[ "${2}" == "audio" ]]; then
                 # This is the file we want to move
@@ -3447,7 +2588,7 @@ for ii in "${!plexCollectionOrder[@]}"; do
                 getAudioFileRatingKey "${dbPlaylistVids[${correctPos}]}"
                 urlRatingKeyAfter="${audioFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}"
             else
-                badExit "155" "Impossible condition"
+                badExit "62" "Impossible condition"
             fi
             
             printOutput "4" "${2^} file ID [${plexCollectionOrder[${ii}]}] misplaced in position [${plexPos}], moving to position [$(( correctPos + 1 ))] [${urlRatingKey} - ${titleById[_${plexCollectionOrder[${ii}]}]} || ${urlRatingKeyAfter} - ${titleById[_${dbPlaylistVids[${correctPos}]}]}]"
@@ -3456,12 +2597,12 @@ for ii in "${!plexCollectionOrder[@]}"; do
             callCurlPut "${plexAdd}/library/collections/${1}/items/${urlRatingKey}/move?after=${urlRatingKeyAfter}&X-Plex-Token=${plexToken}"
         fi
     else
-        badExit "156" "Impossible condition"
+        badExit "63" "Impossible condition"
     fi
 done
 }
 
-function collectionVerifyAdd {
+function collectionAdd {
 # Collection rating key should be passed as ${1}
 if [[ -z "${1}" ]]; then
     printOutput "1" "Pass me a collection rating key please"
@@ -3490,14 +2631,14 @@ for ii in "${dbPlaylistVids[@]}"; do
     if [[ "${inPlaylist}" -eq "0" ]]; then
         if [[ "${2}" == "video" ]]; then
             # This is the file we want to add
-            getVideoFileRatingKey "${ii}"
+            getFileRatingKey "${ii}"
             urlRatingKey="${videoFileRatingKey[_${ii}]}"
         elif [[ "${2}" == "audio" ]]; then
             # This is the file we want to add
             getAudioFileRatingKey "${ii}"
             urlRatingKey="${audioFileRatingKey[_${ii}]}"
         else
-            badExit "157" "Impossible condition"
+            badExit "64" "Impossible condition"
         fi
         assignTitle "${ii}"
         needNewOrder="1"
@@ -3510,7 +2651,7 @@ for ii in "${dbPlaylistVids[@]}"; do
 done
 }
 
-function collectionVerifyDelete {
+function collectionDelete {
 # Collection rating key should be passed as ${1}
 if [[ -z "${1}" ]]; then
     printOutput "1" "Pass me a collection rating key please"
@@ -3536,14 +2677,14 @@ for ii in "${plexCollectionOrder[@]}"; do
     if [[ "${inDbPlaylist}" -eq "0" ]]; then
         if [[ "${2}" == "video" ]]; then
             # This is the file we want to remove
-            getVideoFileRatingKey "${ii}"
+            getFileRatingKey "${ii}"
             urlRatingKey="${videoFileRatingKey[_${ii}]}"
         elif [[ "${2}" == "audio" ]]; then
             # This is the file we want to remove
             getAudioFileRatingKey "${ii}"
             urlRatingKey="${audioFileRatingKey[_${ii}]}"
         else
-            badExit "158" "Impossible condition"
+            badExit "65" "Impossible condition"
         fi
         assignTitle "${ii}"
         needNewOrder="1"
@@ -3556,25 +2697,25 @@ if [[ "${needNewOrder}" -eq "1" ]]; then
 fi
 }
 
-function updateCollectionInfo {
+function collectionUpdate {
 # ${plId} is ${1}
 # ${collectionRatingKey} is ${2}
-collectionDesc="$(sqDb "SELECT DESC FROM source_playlists WHERE ID = '${1}';")"
+collectionDesc="$(sqDb "SELECT DESC FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
 if [[ -z "${collectionDesc}" || "${collectionDesc}" == "null" ]]; then
     # No playlist description set
     collectionDesc="https://www.youtube.com/playlist?list=${1}${lineBreak}Playlist last updated $(date)"
 else
     collectionDesc="${collectionDesc}${lineBreak}-----${lineBreak}https://www.youtube.com/playlist?list=${1}${lineBreak}Playlist last updated $(date)"
 fi
-collectionDescEncoded="$(rawurlencode "${collectionDesc}")"
-if callCurlPut "${plexAdd}/library/sections/${videoLibraryId}/all?type=18&id=${2}&includeExternalMedia=1&summary.value=${collectionDescEncoded}&summary.locked=1&X-Plex-Token=${plexToken}"; then
+collectionDescEncoded="$(rawUrlEncode "${collectionDesc}")"
+if callCurlPut "${plexAdd}/library/sections/${libraryId}/all?type=18&id=${2}&includeExternalMedia=1&summary.value=${collectionDescEncoded}&summary.locked=1&X-Plex-Token=${plexToken}"; then
     printOutput "5" "Updated description for collection ID [${1}]"
 else
     printOutput "1" "Failed to update description for collection ID [${1}]"
 fi
 
 # Update the image
-collectionImg="$(sqDb "SELECT IMAGE FROM source_playlists WHERE ID = '${1}';")"
+collectionImg="$(sqDb "SELECT IMAGE FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
 if [[ -n "${collectionImg}" ]] && ! [[ "${collectionImg}" == "null" ]]; then
     callCurlDownload "${collectionImg}" "${tmpDir}/${1}.jpg"
     callCurlPost "${plexAdd}/library/metadata/${2}/posters?X-Plex-Token=${plexToken}" --data-binary "@${tmpDir}/${1}.jpg"
@@ -3598,14 +2739,14 @@ if [[ "${2}" == "video" ]]; then
 elif [[ "${2}" == "audio" ]]; then
     fileStr="Track"
 else
-    badExit "159" "Impossible condition"
+    badExit "66" "Impossible condition"
 fi
 
 printOutput "5" "Obtaining order of items in ${2} playlist from Plex"
 unset plexPlaylistOrder
 # Start our indexing from one, it makes it easier for my smooth brain to debug playlist positioning
 plexPlaylistOrder[0]="null"
-callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
 while read -r ii; do
     if [[ -z "${ii}" || "${ii}" == "null" ]]; then
         printOutput "1" "No items in playlist"
@@ -3623,7 +2764,7 @@ for ii in "${!plexPlaylistOrder[@]}"; do
 done
 }
 
-function playlistVerifySort {
+function playlistSort {
 # Playlist rating key should be passed as ${1}
 # 'audio' or 'video' should be passed as ${2}
 if [[ -z "${1}" ]]; then
@@ -3643,7 +2784,7 @@ playlistGetOrder "${1}" "${2}"
 printOutput "3" "Checking for items to be re-ordered in ${2} playlist [${1}]"
 
 for ii in "${!plexPlaylistOrder[@]}"; do
-    # ii = position interger [starts from 1]
+    # ii = position integer [starts from 1]
     # plexPlaylistOrder[${ii}] = file ID
     
     assignTitle "${plexPlaylistOrder[${ii}]}"
@@ -3655,17 +2796,17 @@ for ii in "${!plexPlaylistOrder[@]}"; do
             printOutput "4" "Moving ${2} file ID [${dbPlaylistVids[1]}] to position 1 [${titleById[_${dbPlaylistVids[1]}]}]"
             
             if [[ "${2}" == "video" ]]; then
-                getVideoFileRatingKey "${dbPlaylistVids[1]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                getFileRatingKey "${dbPlaylistVids[1]}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${dbPlaylistVids[1]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 printOutput "5" "Item RK [${videoFileRatingKey[_${dbPlaylistVids[1]}]}] | Item PLID [${playlistItemId}]"
             elif [[ "${2}" == "audio" ]]; then
                 getAudioFileRatingKey "${dbPlaylistVids[1]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${audioFileRatingKey[_${dbPlaylistVids[1]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 printOutput "5" "Item RK [${audioFileRatingKey[_${dbPlaylistVids[1]}]}] | Item PLID [${playlistItemId}]"
             else
-                badExit "160" "Impossible condition"
+                badExit "67" "Impossible condition"
             fi
             callCurlPut "${plexAdd}/library/playlists/${1}/items/${playlistItemId}/move?X-Plex-Token=${plexToken}"
             needNewOrder="1"
@@ -3683,26 +2824,26 @@ for ii in "${!plexPlaylistOrder[@]}"; do
             
             if [[ "${2}" == "video" ]]; then
                 # This is the file we want to move
-                getVideoFileRatingKey "${plexPlaylistOrder[${ii}]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                getFileRatingKey "${plexPlaylistOrder[${ii}]}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${plexPlaylistOrder[${ii}]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 # This is the file it should come after
-                getVideoFileRatingKey "${dbPlaylistVids[${correctPos}]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                getFileRatingKey "${dbPlaylistVids[${correctPos}]}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemIdAfter="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 printOutput "5" "Item RK [${videoFileRatingKey[_${plexPlaylistOrder[${ii}]}]}] | Item PLID [${playlistItemId}] | Item pos [${ii}] | After RK [${videoFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}] | After PLID [${playlistItemIdAfter}] | After pos [${correctPos}]"
             elif [[ "${2}" == "audio" ]]; then
                 # This is the file we want to move
                 getAudioFileRatingKey "${plexPlaylistOrder[${ii}]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${audioFileRatingKey[_${plexPlaylistOrder[${ii}]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 # This is the file it should come after
                 getAudioFileRatingKey "${dbPlaylistVids[${correctPos}]}"
-                callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+                callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
                 playlistItemIdAfter="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${audioFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
                 printOutput "5" "Item RK [${audioFileRatingKey[_${plexPlaylistOrder[${ii}]}]}] | Item PLID [${playlistItemId}] | Item pos [${ii}] | After RK [${audioFileRatingKey[_${dbPlaylistVids[${correctPos}]}]}] | After PLID [${playlistItemIdAfter}] | After pos [${correctPos}]"
             else
-                badExit "161" "Impossible condition"
+                badExit "68" "Impossible condition"
             fi
             
             printOutput "4" "${2^} file ID [${plexPlaylistOrder[${ii}]}] misplaced in position [${ii}], moving to position [$(( correctPos + 1 ))]"
@@ -3712,7 +2853,7 @@ for ii in "${!plexPlaylistOrder[@]}"; do
             needNewOrder="1"
         fi
     else
-        badExit "162" "Impossible condition"
+        badExit "69" "Impossible condition"
     fi
     
     if [[ "${needNewOrder}" -eq "1" ]]; then
@@ -3721,7 +2862,7 @@ for ii in "${!plexPlaylistOrder[@]}"; do
 done
 }
 
-function playlistVerifyAdd {
+function playlistAdd {
 # Playlist rating key should be passed as ${1}
 if [[ -z "${1}" ]]; then
     printOutput "1" "Pass me a playlist rating key please"
@@ -3750,14 +2891,14 @@ for ii in "${dbPlaylistVids[@]}"; do
     if [[ "${inPlaylist}" -eq "0" ]]; then
         if [[ "${2}" == "video" ]]; then
             # This is the file we want to add
-            getVideoFileRatingKey "${ii}"
+            getFileRatingKey "${ii}"
             urlRatingKey="${videoFileRatingKey[_${ii}]}"
         elif [[ "${2}" == "audio" ]]; then
             # This is the file we want to add
             getAudioFileRatingKey "${ii}"
             urlRatingKey="${audioFileRatingKey[_${ii}]}"
         else
-            badExit "163" "Impossible condition"
+            badExit "70" "Impossible condition"
         fi
         assignTitle "${ii}"
         needNewOrder="1"
@@ -3770,7 +2911,7 @@ for ii in "${dbPlaylistVids[@]}"; do
 done
 }
 
-function playlistVerifyDelete {
+function playlistDelete {
 # Playlist rating key should be passed as ${1}
 if [[ -z "${1}" ]]; then
     printOutput "1" "Pass me a playlist rating key please"
@@ -3799,16 +2940,16 @@ for ii in "${plexPlaylistOrder[@]}"; do
     if [[ "${inDbPlaylist}" -eq "0" ]]; then
         if [[ "${2}" == "video" ]]; then
             # This is the file we want to remove
-            getVideoFileRatingKey "${ii}"
-            callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+            getFileRatingKey "${ii}"
+            callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
             playlistItemId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${ii}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
         elif [[ "${2}" == "audio" ]]; then
             # This is the file we want to remove
             getAudioFileRatingKey "${ii}"
-            callCurl "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
+            callCurlGet "${plexAdd}/playlists/${1}/items?X-Plex-Token=${plexToken}"
             playlistItemId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${audioFileRatingKey[_${ii}]}\" ) .\"+@playlistItemID\"" <<<"${curlOutput}")"
         else
-            badExit "164" "Impossible condition"
+            badExit "71" "Impossible condition"
         fi
         assignTitle "${ii}"
         needNewOrder="1"
@@ -3821,18 +2962,18 @@ if [[ "${needNewOrder}" -eq "1" ]]; then
 fi
 }
 
-function updatePlaylistInfo {
+function playlistUpdate {
 # ${plId} is ${1}
 # ${playlistRatingKey} is ${2}
 # Update the description
-playlistDesc="$(sqDb "SELECT DESC FROM source_playlists WHERE ID = '${1}';")"
+playlistDesc="$(sqDb "SELECT DESC FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
 if [[ -z "${playlistDesc}" || "${playlistDesc}" == "null" ]]; then
     # No playlist description set
     playlistDesc="https://www.youtube.com/playlist?list=${1}${lineBreak}Playlist last updated $(date)"
 else
     playlistDesc="${playlistDesc}${lineBreak}-----${lineBreak}https://www.youtube.com/playlist?list=${1}${lineBreak}Playlist last updated $(date)"
 fi
-playlistDescEncoded="$(rawurlencode "${playlistDesc}")"
+playlistDescEncoded="$(rawUrlEncode "${playlistDesc}")"
 if callCurlPut "${plexAdd}/playlists/${2}?summary=${playlistDescEncoded}&X-Plex-Token=${plexToken}"; then
     printOutput "5" "Updated description for playlist ID [${1}]"
 else
@@ -3840,44 +2981,12 @@ else
 fi
 
 # Update the image
-playlistImg="$(sqDb "SELECT IMAGE FROM source_playlists WHERE ID = '${1}';")"
+playlistImg="$(sqDb "SELECT IMAGE FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
 if [[ -n "${playlistImg}" ]] && ! [[ "${playlistImg}" == "null" ]]; then
     callCurlDownload "${playlistImg}" "${tmpDir}/${1}.jpg"
     callCurlPost "${plexAdd}/library/metadata/${2}/posters?X-Plex-Token=${plexToken}" --data-binary "@${tmpDir}/${1}.jpg"
     rm -f "${tmpDir}/${1}.jpg"
     printOutput "4" "Playlist [${2}] image set"
-fi
-}
-
-function sqDb {
-# Log the command we're executing to the database, for development purposes
-idCount="$(sqlite3 "${sqliteDb}" "SELECT ID FROM db_log ORDER BY ID DESC LIMIT 1;")"
-
-# Validate it
-if [[ -z "${idCount}" ]]; then
-    # We're the first entry
-    idCount="1"
-elif [[ "${idCount}" =~ ^[0-9]+$ ]]; then
-    # Expected outcome
-    (( idCount++ ))
-elif ! [[ "${idCount}" =~ ^[0-9]+$ ]]; then
-    printOutput "1" "Data [${idCount}] failed to validate as an interger"
-    return 1
-else
-    badExit "165" "Impossible condition"
-fi
-
-# Execute the command
-if sqOutput="$(sqlite3 "${sqliteDb}" "${1}" 2>&1)"; then
-    if [[ -n "${sqOutput}" ]]; then
-        echo "${sqOutput}"
-    fi
-else
-    sqlite3 "${sqliteDb}" "INSERT INTO db_log (ID, TIME, COMMAND, RESULT, OUTPUT) VALUES (${idCount}, '$(date)', '${1//\'/\'\'}', 'Failure', '${sqOutput//\'/\'\'}');"
-    if [[ -n "${sqOutput}" ]]; then
-        echo "${sqOutput}"
-    fi
-    return 1
 fi
 }
 
@@ -3894,6 +3003,7 @@ trap "badExit SIGQUIT" QUIT
 printHelp="0"
 doUpdate="0"
 skipDownload="0"
+importMedia="0"
 verifyMedia="0"
 updateRatingKeys="0"
 updateMetadata="0"
@@ -3910,6 +3020,11 @@ while [[ -n "${*}" ]]; do
     ;;
     "-s"|"--skip-download")
         skipDownload="1"
+    ;;
+    "-i"|"--import-media")
+        importMedia="1"
+        shift
+        importDir="${1}"
     ;;
     "-v"|"--verify-media")
         verifyMedia="1"
@@ -3956,14 +3071,24 @@ scriptVer="${scriptVer#\# }"
                              Can be useful for if you only want to
                              do maintenance tasks
 
+-i  --import-media          Imports media from a supplied directory
+                             Usage is: -i \"/path/to/directory\"
+                            It will recurseively search for files in
+                            that directory path that match the file
+                            name format [VIDEO_ID].[ext], where
+                            'VIDEO_ID' is the 11 character video ID,
+                            and [ext] is an 'mp4' extension
+                             * Also note, file extensions MUST be
+                             lowercase to be detected properly
+
 -v  --verify-media          Compares media on the file system to
                              media in the database, and adds any
                              missing items to the database
                              * Note, this requires that the naming
                              scheme for untracked media to end in
                              '[VIDEO_ID].[ext]' where 'VIDEO_ID' is
-                             the 11 character video id, and [ext]
-                             is an 'mp4', 'mp3' or 'opus' extension
+                             the 11 character video ID, and [ext]
+                             is an 'mp4' extension
                              * Also note, file extensions MUST be
                              lowercase to be detected properly
 
@@ -3983,7 +3108,7 @@ scriptVer="${scriptVer#\# }"
                              new content
 
 -d  --db-maintenance        Preforms some database cleaning and
-                             maintenance via sqlite's 'VACUUM'"
+                             maintenance"
 
 
     cleanExit "--silent"
@@ -4027,10 +3152,10 @@ if [[ "${doUpdate}" -eq "1" ]]; then
                 printOutput "1"  "${i}"
             done
         else
-            badExit "166" "Update downloaded, but unable to \`chmod +x\`"
+            badExit "72" "Update downloaded, but unable to \`chmod +x\`"
         fi
     else
-        badExit "167" "Unable to download Update"
+        badExit "73" "Unable to download Update"
     fi
     cleanExit
 fi
@@ -4038,11 +3163,10 @@ fi
 #############################
 ##   Initiate .env file    ##
 #############################
-################ UNCOMMENT
 if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
     source "${realPath%/*}/${scriptName%.bash}.env"
 else
-    badExit "168" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+    badExit "74" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
 fi
 
 printOutput "4" "Validating config file"
@@ -4071,15 +3195,23 @@ if [[ "${throttleMin}" -gt "${throttleMax}" ]]; then
     throttleMin="30"
     throttleMax="120"
 fi
-printOutput "5" "TODO: Validate config options"
-if ! [[ -d "${videoOutputDir}" ]]; then
-    printOutput "1" "Video output dir [${videoOutputDir}] does not appear to exist -- Please create it, and add it to Plex"
+if ! [[ -d "${outputDir}" ]]; then
+    printOutput "1" "Video output dir [${outputDir}] does not appear to exist -- Please create it, and add it to Plex"
     varFail="1"
 fi
-if ! [[ -d "${audioOutputDir}" ]]; then
-    printOutput "1" "Audio output dir [${audioOutputDir}] does not appear to exist -- Please create it, and add it to Plex"
+if [[ -z "${tmpDir}" ]]; then
+    printOutput "1" "Temporary directory [${tmpDir}] is not set"
     varFail="1"
+else
+    # Create our tmpDir
+    if ! [[ -d "${tmpDir}" ]]; then
+        if ! mkdir -p "${tmpDir}"; then
+            badExit "75" "Unable to create tmp dir [${tmpDir}]"
+        fi
+    fi
+    tmpDir="$(mktemp -d -p "${tmpDir}")"
 fi
+
 if [[ "${#ytApiKeys[@]}" -eq "0" ]]; then
     printOutput "2" "No YouTube Data API keys provided -- Will use LemnosLife, at a greatly reduced call rate"
 fi
@@ -4112,7 +3244,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "169" "Please fix above errors"
+    badExit "76" "Please fix above errors"
 fi
 
 #############################
@@ -4120,7 +3252,7 @@ fi
 #############################
 if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     printOutput "4" "Checking for updates"
-    callCurl "${updateURL}"
+    callCurlGet "${updateURL}"
     while read -r i; do
         if [[ "${i}" == "##        Changelog        ##" ]]; then
             scriptVer="1"
@@ -4151,155 +3283,105 @@ fi
 #############################
 ##         Payload         ##
 #############################
+# If we're being invoked by cron, sleep for up to ${cronSleep}
+case "$-" in
+    *i*)
+        printOutput "5" "Script spawned by interactive terminal"
+        ;;
+    *)
+        printOutput "4" "Script spawned by cron with PID [${$}]"
+        if [[ "${cronSleep}" =~ ^[0-9]+$ ]]; then
+            sleepTime="$(( RANDOM % cronSleep ))"
+            printOutput "3" "Sleeping for [${sleepTime}] seconds before continuing"
+            sleep "${sleepTime}"
+        fi
+        ;;
+esac
+
+
 # Define some variables
 apiCallsYouTube="0"
 apiCallsLemnos="0"
 sqliteDb="${realPath%/*}/.${scriptName}.db"
-declare -A reindexArr newVideoMediaPath newAudioMediaPath dbVidSeriesArr dbAudSeriesArr videoFileRatingKey audioFileRatingKey titleById
-
-# Create our tmpDir
-tmpDir="$(mktemp -d -p "${tmpDir}")"
+declare -A reindexArr watchedArr verifiedArr
 
 # If no database exists, create one
 if ! [[ -e "${sqliteDb}" ]]; then
     printOutput "3" "############### Initializing database #################"
-    sqlite3 "${sqliteDb}" "CREATE TABLE source_videos(ID TEXT PRIMARY KEY, CONFIG INTERGER, TITLE TEXT, TITLE_CLEAN TEXT, CHANNEL_ID TEXT, TIMESTAMP INTERGER, YEAR INTERGER, DESC TEXT, EP_INDEX INTERGER, SB_OPTIONS TEXT, VID_FORMAT TEXT, AUD_FORMAT TEXT, VID_SHORTS_DL TEXT, AUD_SHORTS_DL TEXT, LIVE TEXT, WATCHED TEXT, TYPE TEXT, VID_STATUS TEXT, AUD_STATUS TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE source_channels(ID TEXT PRIMARY KEY, NAME TEXT, NAME_CLEAN TEXT, TIMESTAMP INTERGER, SUB_COUNT INTERGER, COUNTRY TEXT, URL TEXT, VID_COUNT INTERGER, VIEW_COUNT INTERGER, DESC TEXT, PATH TEXT, IMAGE TEXT, BANNER TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE source_playlists(ID TEXT PRIMARY KEY, VISIBILITY TEXT, TITLE TEXT, DESC TEXT, IMAGE TEXT, VID_RATING_KEY INTERGER, AUD_RATING_KEY INTERGER, UPDATED INTERGER);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE source_videos(ID TEXT PRIMARY KEY, TITLE TEXT, TITLE_CLEAN TEXT, CHANNEL_ID TEXT, TIMESTAMP INTEGER, YEAR INTEGER, EP_INDEX INTEGER, DESC TEXT, TYPE TEXT, FORMAT TEXT, SHORTS TEXT, LIVE TEXT, WATCHED TEXT, STATUS TEXT, ERROR TEXT, SB_ENABLE TEXT, SB_REQUIRE TEXT, SB_AVAILABLE TEXT, UPDATED INTEGER);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE source_channels(ID TEXT PRIMARY KEY, NAME TEXT, NAME_CLEAN TEXT, TIMESTAMP INTEGER, SUB_COUNT INTEGER, COUNTRY TEXT, URL TEXT, VID_COUNT INTEGER, VIEW_COUNT INTEGER, DESC TEXT, PATH TEXT, IMAGE TEXT, BANNER TEXT, UPDATED INTEGER);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE source_playlists(ID TEXT PRIMARY KEY, VISIBILITY TEXT, TITLE TEXT, DESC TEXT, IMAGE TEXT, UPDATED INTEGER);"
 
-    sqlite3 "${sqliteDb}" "CREATE TABLE playlist_order(SQID INTERGER PRIMARY KEY, ID TEXT, PLAYLIST_INDEX INTERGER, PLAYLIST_KEY TEXT, UPDATED INTERGER);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE playlist_order(SQID INTEGER PRIMARY KEY AUTOINCREMENT, ID TEXT, PLAYLIST_INDEX INTEGER, PLAYLIST_KEY TEXT, UPDATED INTEGER);"
 
-    sqlite3 "${sqliteDb}" "CREATE TABLE video_rating_key_by_channel(RATING_KEY INTERGER PRIMARY KEY, CHANNEL_ID TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE video_rating_key_by_season(RATING_KEY INTERGER PRIMARY KEY, YEAR INTERGER, CHANNEL_ID TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE video_rating_key_by_item(RATING_KEY INTERGER PRIMARY KEY, ID TEXT, UPDATED INTERGER);"
-
-    sqlite3 "${sqliteDb}" "CREATE TABLE audio_rating_key_by_channel(RATING_KEY INTERGER PRIMARY KEY, CHANNEL_ID TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE audio_rating_key_by_album(RATING_KEY INTERGER PRIMARY KEY, ID TEXT, UPDATED INTERGER);"
-    sqlite3 "${sqliteDb}" "CREATE TABLE audio_rating_key_by_item(RATING_KEY INTERGER PRIMARY KEY, ID TEXT, UPDATED INTERGER);"
-
-    sqlite3 "${sqliteDb}" "CREATE TABLE db_log(ID INTERGER PRIMARY KEY, TIME TEXT, RESULT TEXT, COMMAND TEXT, OUTPUT TEXT);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE rating_key(CHANNEL_ID TEXT PRIMARY KEY, RATING_KEY INTEGER, UPDATED INTEGER);"
+    
+    sqlite3 "${sqliteDb}" "CREATE TABLE db_log(ID INTEGER PRIMARY KEY AUTOINCREMENT, TIME TEXT, RESULT TEXT, COMMAND TEXT, OUTPUT TEXT);"
 fi
 
 # Preform database maintenance, if needed
 if [[ "${dbMaint}" -eq "1" ]]; then
+    printOutput "5" "TODO: Finish this"
     startTime="$(($(date +%s%N)/1000000))"
     printOutput "3" "########### Preforming database maintenance ###########"
     
-    # Verify the 'ID' column of audio_rating_key_by_album
-    readarray -t verifyArr < <(sqDb "SELECT ID FROM audio_rating_key_by_album;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "170" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of file ID [${i}] found in [audio_rating_key_by_album] table -- Database corrupted!"
-        fi
-    done
-
-    # Verify the 'CHANNEL_ID' column of audio_rating_key_by_channel
-    readarray -t verifyArr < <(sqDb "SELECT CHANNEL_ID FROM audio_rating_key_by_channel;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "171" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of channel ID [${i}] found in [audio_rating_key_by_channel] table -- Database corrupted!"
-        fi
-    done
+    ## source_videos table
+    # Verify the 'TITLE' column is not empty
+    # Verify the 'TITLE_CLEAN' column is not empty
+    # Verify the 'CHANNEL_ID' column is not empty
+        # Options are: regex ^[0-9A-Za-z_-]{23}[AQgw]$
+    # Verify the 'TIMESTAMP' column is not empty
+        # Options are: is an integer
+    # Verify the 'YEAR' column is not empty
+        # Options are: is an integer
+    # Verify the 'EP_INDEX' column is not empty
+        # Options are: is an integer
+    # Verify the 'FORMAT' column is not empty
+        # Options are: 'original' 'max' '4320p' '8k' '2160p' '4k' '1440p' '2k' '1080p' '720p' '480p' '360p' '240p' '144p' 'none'
+    # Verify the 'TYPE' column is not empty
+        # Options are: 'live' 'is_live' 'short' 'members_only' 'regular'
+    # Verify the 'SHORTS' column is not empty
+        # Options are: true/false
+    # Verify the 'LIVE' column is not empty
+        # Options are: true/false
+    # Verify the 'WATCHED' column is not empty
+        # Options are: true/false
+    # Verify the 'STATUS' column is not empty
+        # Options are: 'queued' 'downloaded' 'failed' 'skipped' 'sb_wait' 'sb_upgrade'
+    # Verify the 'SB_ENABLE' column is not empty
+        # Options are: 'disable' 'mark' 'remove'
+    # If 'SB_ENABLE' is not 'disable', verify the 'SB_REQUIRE' column is not empty
+        # Options are: true/false
+    # If 'SB_ENABLE' is not 'disable', verify the 'SB_AVAILABLE' column is not empty
+        # Options are: true/false
+    # Verify the 'UPDATED' column is not empty
+        # Options are: is an integer
     
-    # Verify the 'ID' column of audio_rating_key_by_item
-    readarray -t verifyArr < <(sqDb "SELECT ID FROM audio_rating_key_by_item;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "172" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of file ID [${i}] found in [audio_rating_key_by_item] table -- Database corrupted!"
-        fi
-    done
+    ## source_channels table
+    # Verify the 'NAME' column is not empty
+    # Verify the 'NAME_CLEAN' column is not empty
+    # Verify the 'TIMESTAMP' column is not empty
+        # Options are: is an integer
+    # Verify the 'SUB_COUNT' column is not empty
+        # Options are: is an integer
+    # Verify the 'COUNTRY' column is not empty
+    # Verify the 'URL' column is not empty
+    # Verify the 'VID_COUNT' column is not empty
+        # Options are: is an integer
+    # Verify the 'VIEW_COUNT' column is not empty
+        # Options are: is an integer
+    # Verify the 'PATH' column is not empty
+    # Verify the 'IMAGE' column is not empty
+    # Verify the 'BANNER' column is not empty
+    # Verify the 'UPDATED' column is not empty
+        # Options are: is an integer
     
-    # Verify the 'ID' column of video_rating_key_by_channel
-    readarray -t verifyArr < <(sqDb "SELECT CHANNEL_ID FROM video_rating_key_by_channel;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "173" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of channel ID [${i}] found in [video_rating_key_by_channel] table -- Database corrupted!"
-        fi
-    done
-
-    # Verify the 'CHANNEL_ID' column of video_rating_key_by_season
-    readarray -t verifyArr < <(sqDb "SELECT CHANNEL_ID, YEAR FROM video_rating_key_by_season;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "174" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of channel ID [${i%|*}] and year [${i#*|}] found in [video_rating_key_by_season] table -- Database corrupted!"
-        fi
-    done
+    ## source_playlists table
+    # VISIBILITY TEXT, TITLE TEXT, DESC TEXT, IMAGE TEXT, UPDATED INTEGER
     
-    # Verify the 'ID' column of video_rating_key_by_item
-    readarray -t verifyArr < <(sqDb "SELECT ID FROM video_rating_key_by_item;")
-    for i in "${verifyArr[@]}"; do
-        count="0"
-        for ii in "${verifyArr[@]}"; do
-            if [[ "${i}" == "${ii}" ]]; then
-                (( count++ ))
-            fi
-        done
-        if [[ "${count}" -eq "0" ]]; then
-            badExit "175" "Impossible condition"
-        elif [[ "${count}" -eq "1" ]]; then
-            # Expected outcome
-            true
-        elif [[ "${count}" -gt "1" ]]; then
-            printOutput "1" "Multiple instances of file ID [${i}] found in [video_rating_key_by_item] table -- Database corrupted!"
-        fi
-    done
-    
-    # For each playlist in the playlist_order table, verify that each video ID only appears once, and each index position only appears once
+    ## playlist_order table
+    # ID TEXT, PLAYLIST_INDEX INTEGER, PLAYLIST_KEY TEXT, UPDATED INTEGER
+    # Verify that each video ID only appears once, and each index position only appears once
     dbColumns=("ID" "PLAYLIST_INDEX")
     while read -r plId; do
         for dbColumn in "${dbColumns[@]}"; do
@@ -4312,7 +3394,7 @@ if [[ "${dbMaint}" -eq "1" ]]; then
                     fi
                 done
                 if [[ "${count}" -eq "0" ]]; then
-                    badExit "176" "Impossible condition"
+                    badExit "77" "Impossible condition"
                 elif [[ "${count}" -eq "1" ]]; then
                     # Expected outcome
                     true
@@ -4322,6 +3404,9 @@ if [[ "${dbMaint}" -eq "1" ]]; then
             done
         done
     done < <(sqDb "SELECT DISTINCT PLAYLIST_KEY FROM playlist_order;")
+    
+    ## rating_key table
+    # RATING_KEY INTEGER, UPDATED INTEGER
     
     sqDb "VACUUM;"
     printOutput "3" "Database health check and optimization completed [Took $(timeDiff "${startTime}")]"
@@ -4334,8 +3419,8 @@ getContainerIp "${plexIp}"
 
 # Build our full address
 plexAdd="${plexScheme}://${containerIp}:${plexPort}"
-if ! callCurl "${plexAdd}/servers?X-Plex-Token=${plexToken}"; then
-    badExit "177" "Unable to intiate connection to the Plex Media Server"
+if ! callCurlGet "${plexAdd}/servers?X-Plex-Token=${plexToken}"; then
+    badExit "78" "Unable to intiate connection to the Plex Media Server"
 fi
 # Make sure we can reach the server
 numServers="$(yq -p xml ".MediaContainer.+@size" <<<"${curlOutput}")"
@@ -4348,36 +3433,28 @@ elif [[ "${numServers}" -eq "1" ]]; then
     serverMachineId="$(yq -p xml ".MediaContainer.Server.+@machineIdentifier" <<<"${curlOutput}")"
     serverName="$(yq -p xml ".MediaContainer.Server.+@name" <<<"${curlOutput}")"
 else
-    badExit "178" "No Plex Media Servers found."
+    badExit "79" "No Plex Media Servers found."
 fi
 if [[ -z "${serverName}" || -z "${serverVersion}" || -z "${serverMachineId}" ]]; then
-    badExit "179" "Unable to validate Plex Media Server"
+    badExit "80" "Unable to validate Plex Media Server"
 fi
 # Get the library ID for our video output directory
 # Count how many libraries we have
-callCurl "${plexAdd}/library/sections/?X-Plex-Token=${plexToken}"
+callCurlGet "${plexAdd}/library/sections/?X-Plex-Token=${plexToken}"
 numLibraries="$(yq -p xml ".MediaContainer.Directory | length" <<<"${curlOutput}")"
 if [[ "${numLibraries}" -eq "0" ]]; then
-    badExit "180" "No libraries detected in the Plex Media Server"
+    badExit "81" "No libraries detected in the Plex Media Server"
 fi
 z="0"
 while [[ "${z}" -lt "${numLibraries}" ]]; do
     # Get the path for our library ID
     plexPath="$(yq -p xml ".MediaContainer.Directory[${z}].Location.\"+@path\"" <<<"${curlOutput}")"
-    if [[ "${videoOutputDir}" =~ ^.*"${plexPath}"$ ]]; then
+    if [[ "${outputDir}" =~ ^.*"${plexPath}"$ ]]; then
         # Get the library name
         libraryName="$(yq -p xml ".MediaContainer.Directory[${z}].\"+@title\"" <<<"${curlOutput}")"
         # Get the library ID
-        videoLibraryId="$(yq -p xml ".MediaContainer.Directory[${z}].\"+@key\"" <<<"${curlOutput}")"
-
-        printOutput "4" "Matched Plex video library [${libraryName}] to library ID [${videoLibraryId}]"
-    elif [[ "${audioOutputDir}" =~ ^.*"${plexPath}"$ ]]; then
-        # Get the library name
-        libraryName="$(yq -p xml ".MediaContainer.Directory[${z}].\"+@title\"" <<<"${curlOutput}")"
-        # Get the library ID
-        audioLibraryId="$(yq -p xml ".MediaContainer.Directory[${z}].\"+@key\"" <<<"${curlOutput}")"
-
-        printOutput "4" "Matched Plex audio library [${libraryName}] to library ID [${audioLibraryId}]"
+        libraryId="$(yq -p xml ".MediaContainer.Directory[${z}].\"+@key\"" <<<"${curlOutput}")"
+        printOutput "4" "Matched Plex video library [${libraryName}] to library ID [${libraryId}]"
     fi
     (( z++ ))
 done
@@ -4385,1438 +3462,1008 @@ printOutput "3" "Validated Plex Media Server: ${serverName} [Version: ${serverVe
 
 if [[ "${verifyMedia}" -eq "1" ]]; then
     printOutput "3" "############### Verifying media library ###############"
-    printOutput "3" "Verifying media items within Plex"
-    if [[ -d "${videoOutputDir}" ]]; then
-        # Find all the videos in the video library
-        newMediaType="video"
-        readarray -t knownMedia < <(find "${videoOutputDir}" -type f -name "*.mp4")
-        for i in "${knownMedia[@]}"; do
-            # Make sure we can extract the file ID
-            ytId="${i%\]\.*}"
-            ytId="${ytId##*\[}"
-            # See if what we have matches what a file ID should be
-            if [[ "${ytId}" =~ ^[A-Za-z0-9_\-]{11}$ ]]; then
-                # It's a valid ID
-                # Note the file path with an associative array
-                # The key is '_${ytId}'
-                # The value is the path
-                newVideoMediaPath["_${ytId}"]="${i}"
-                # Do we have the ID in the database already?
-                dbCount="$(sqDb "SELECT COUNT(1) from source_videos WHERE ID = '${ytId}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It's not in the database, let's add it
-                    if compareFileIdToDb "${ytId}"; then
-                        newMedia+=("${ytId}")
-                        vidTitle="$(sqDb "SELECT TITLE from source_videos WHERE ID = '${ytId}';")"
-                        if [[ -z "${vidTitle}" ]]; then
-                            badExit "181" "Unable to extract video title from file ID [${ytId}]"
-                        fi
-                        printOutput "2" "Found untracked video file ID [${ytId}] [${vidTitle}]"
-                    else
-                        printOutput "1" "Failed to add file [${i}] to database"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # The audio might be in there and the video not. If so, it'll return 'skipped'
-                    if dbReply="$(sqDb "SELECT VID_STATUS from source_videos WHERE ID = '${ytId}';")"; then
-                        printOutput "5" "Successfully looked up video statis [${dbReply}] for file ID [${ytId}]"
-                    else
-                        badExit "182" "Failed to look up video statis [${dbReply}] for file ID [${ytId}]"
-                    fi
-                    if [[ "${dbReply}" == "skipped" ]]; then
-                        if compareFileIdToDb "${ytId}" "${i##*.}"; then
-                            newMedia+=("${ytId}")
-                            vidTitle="$(sqDb "SELECT TITLE from source_videos WHERE ID = '${ytId}';")"
-                            if [[ -z "${vidTitle}" ]]; then
-                                badExit "183" "Unable to extract video title from file ID [${ytId}]"
-                            fi
-                            printOutput "3" "Found untracked video file ID [${ytId}] [${vidTitle}]"
-                        else
-                            printOutput "1" "Failed to add file [${i}] to database"
-                        fi
-                    fi
+    verifySuccessCount="0"
+    verifyFailCount="0"
+    # Get a list of known media files from the FS in an array
+    declare -A knownFiles
+    while read -r i; do
+        ytId="${i%\]\.mp4}"
+        ytId="${ytId##*\[}"
+        knownFiles["_${ytId}"]="found"
+    done < <(find "${outputDir}" -type f -regextype egrep -regex "^.*\[([A-Za-z0-9_-]{11})\]\.mp4")
+    # Get a list of shows
+    callCurlGet "${plexAdd}/library/sections/${libraryId}/all?X-Plex-Token=${plexToken}"
+    readarray -t knownRatingKeys < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
+    # For every show in Plex
+    for ratingKey in "${knownRatingKeys[@]}"; do
+        ## Get a list of seasons for that show
+        callCurlGet "${plexAdd}/library/metadata/${ratingKey}/children?X-Plex-Token=${plexToken}"
+        ## Get the show name, for printing
+        seriesTitle="$(yq -p xml ".MediaContainer.\"+@parentTitle\"" <<<"${curlOutput}")"
+        printOutput "4" "Verifying series [${seriesTitle}] with rating key [${ratingKey}]"
+        readarray -t knownSeasonRatingKeys < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
+        ## For every season of that show
+        for seasonRatingKey in "${knownSeasonRatingKeys[@]}"; do
+            ### Get a list of episodes for that season
+            callCurlGet "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
+            ### Get the season number, for printing
+            seasonYear="$(yq -p xml ".MediaContainer.\"+@parentIndex\"" <<<"${curlOutput}")"
+            printOutput "4" "Verifying season year [${seasonYear}] with rating key [${seasonRatingKey}]"
+            ### For every episode of that season
+            while read -r knownFileId; do
+                #### Isolate the file ID
+                ytId="${knownFileId%\]\.mp4}"
+                ytId="${ytId##* \[}"
+                #### Remove the file ID from the array
+                if [[ -n "${knownFiles[_${ytId}]}" ]]; then
+                    unset knownFiles[_${ytId}]
+                    printOutput "5" "Verified [${knownFileId##*/}]"
+                    (( verifySuccessCount++ ))
+                else
+                    #### If the file ID is not in the array, log it in an error array (Exists in Plex, not on FS)
+                    orphanFiles+=("${knownFileId}")
+                    printOutput "5" "Failed to verify [${knownFileId##*/}]"
+                    (( verifyFailCount++ ))
                 fi
-            fi
+            done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .Media | ([] + .) | .[] | .Part.\"+@file\"" <<<"${curlOutput}")
         done
-
-        if [[ "${#newMedia[@]}" -eq "0" ]]; then
-            printOutput "3" "All media from [${videoOutputDir}] logged in database [${#knownMedia[@]} items]"
-        fi
-
-        # Set the episode index position for all the videos we just added
-        for ytId in "${newMedia[@]}"; do
-            # Set index position for videos
-            # Get our channel ID
-            channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                printOutput "1" "Channel ID lookup for file ID [${ytId}] returned invalid result [${channelId}]"
-                (( n++ ))
-                continue
-            fi
-            # Get our year
-            vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if ! [[ "${vidYear}" =~ ^[0-9][0-9][0-9][0-9]$ ]]; then
-                printOutput "1" "Year lookup for file ID [${ytId}] returned invalid result [${vidYear}]"
-                (( n++ ))
-                continue
-            fi
-            # Get the order of all items in that season
-            readarray -t seasonOrder < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} ORDER BY TIMESTAMP ASC;")
-
-            # Iterate through the season until our ID matches, so we know our position
-            vidIndex="1"
-            for z in "${seasonOrder[@]}"; do
-                if [[ "${z}" == "${ytId}" ]]; then
-                    break
-                fi
-                (( vidIndex++ ))
-            done
-
-            # Log that position in the database
-            if ! sqDb "UPDATE source_videos SET EP_INDEX = '${vidIndex}', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                badExit "184" "Unable to update episode index to [S${vidYear}E${vidIndex}] for file ID [${ytId}]"
-            fi
-
-            # Verify our path is correct
-            # Start by getting our save path from the DB
-            chanDir="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId}';")"
-            # Then get our clean channel name
-            channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId}';")"
-            # Then get our clean file name title
-            vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId}';")"
-            if ! [[ "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" == "${newVideoMediaPath[_${ytId}]}" ]]; then
-                # It's not in the right place. Let's move it.
-                # Make sure the destination exists
-                if ! [[ -d "${videoOutputDir}/${chanDir}" ]]; then
-                    if ! mkdir -p "${videoOutputDir}/${chanDir}"; then
-                        badExit "185" "Unable to create directory [${videoOutputDir}/${chanDir}]"
-                    fi
-                    makeShowImage "${chanDir}" "${channelId}"
-                fi
-                if ! [[ -d "${videoOutputDir}/${chanDir}/Season ${vidYear}" ]]; then
-                    if ! mkdir -p "${videoOutputDir}/${chanDir}/Season ${vidYear}"; then
-                        badExit "186" "Unable to create directory [${videoOutputDir}/${chanDir}/Season ${vidYear}]"
-                    fi
-                    makeSeasonImage "${chanDir}" "${vidYear}" "${channelId}"
-                fi
-                # Move the file
-                if ! mv "${newVideoMediaPath[_${ytId}]}" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
-                    badExit "187" "Unable to correct found file [${newVideoMediaPath[_${ytId}]}] to [${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4]"
-                fi
-                # If it had a thumbnail, move that too
-                if [[ -e "${newVideoMediaPath[_${ytId}]%.mp4}.jpg" ]]; then
-                    if ! mv "${newVideoMediaPath[_${ytId}]%.mp4}.jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
-                        badExit "188" "Unable to correct found thumbnail [${newVideoMediaPath[_${ytId}]%.mp4}.jpg] to [${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg]"
-                    fi
-                fi
-                printOutput "3" "Corrected found file location for video file ID [${ytId}]"
-            fi
+    done
+    printOutput "3" "Verified ${verifySuccessCount} files | Failed to verify ${verifyFailCount} files"
+    # Print any remaining FS file ID's which were not matched in plex (Exist on FS, not in Plex) -- Print error array, if not empty
+    if [[ "${#orphanFiles[@]}" -ne "0" ]]; then
+        printOutput "1" "Found [${#orphanFiles[@]}] orphaned files in Plex:"
+        for i in "${orphanFiles[@]}"; do
+            printOutput "1" "${i}"
         done
     fi
-
-    if [[ -d "${audioOutputDir}" ]]; then
-        # Find all the songs in the audio library
-        unset newMedia
-        newMediaType="audio"
-        readarray -t knownMedia < <(find "${audioOutputDir}" -type f -name "*.mp3" -o -name "*.opus")
-        for i in "${knownMedia[@]}"; do
-            # Make sure we can extract the file ID
-            ytId="${i%\].mp3}"
-            ytId="${ytId%\].opus}"
-            ytId="${ytId##*\[}"
-            # See if what we have matches what a file ID should be
-            if [[ "${ytId}" =~ ^[A-Za-z0-9_\-]{11}$ ]]; then
-                # It's a valid ID
-                # Note the file path with an associative array
-                # The key is '_${ytId}'
-                # The value is the path
-                newAudioMediaPath["_${ytId}"]="${i}"
-                # Do we have the ID in the database already?
-                dbCount="$(sqDb "SELECT COUNT(1) from source_videos WHERE ID = '${ytId}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It's not in the database, let's add it
-                    if compareFileIdToDb "${ytId}" "${i##*.}"; then
-                        newMedia+=("${ytId}")
-                        vidTitle="$(sqDb "SELECT TITLE from source_videos WHERE ID = '${ytId}';")"
-                        if [[ -z "${vidTitle}" ]]; then
-                            badExit "189" "Unable to extract audio title from file ID [${ytId}]"
-                        fi
-                        printOutput "3" "Found untracked audio file ID [${ytId}] [${vidTitle}]"
-                    else
-                        printOutput "1" "Failed to add file [${i}] to database"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # The video might be in there and the audio not. If so, it'll return 'skipped'
-                    if dbReply="$(sqDb "SELECT AUD_STATUS from source_videos WHERE ID = '${ytId}';")"; then
-                        printOutput "5" "Successfully looked up audio statis [${dbReply}] for file ID [${ytId}]"
-                    else
-                        badExit "190" "Failed to look up audio statis [${dbReply}] for file ID [${ytId}]"
-                    fi
-                    if [[ "${dbReply}" == "skipped" ]]; then
-                        if compareFileIdToDb "${ytId}" "${i##*.}"; then
-                            newMedia+=("${ytId}")
-                            vidTitle="$(sqDb "SELECT TITLE from source_videos WHERE ID = '${ytId}';")"
-                            if [[ -z "${vidTitle}" ]]; then
-                                badExit "191" "Unable to extract audio title from file ID [${ytId}]"
-                            fi
-                            printOutput "3" "Found untracked audio file ID [${ytId}] [${vidTitle}]"
-                        else
-                            printOutput "1" "Failed to add file [${i}] to database"
-                        fi
-                    fi
-                fi
-            fi
-        done
-
-        if [[ "${#newMedia[@]}" -eq "0" ]]; then
-            printOutput "3" "All media from [${audioOutputDir}] logged in database [${#knownMedia[@]} items]"
-        fi
-
-        for ytId in "${newMedia[@]}"; do
-            # Verify the found file is in the correct path
-            # Get our channel ID
-            channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                printOutput "1" "Channel ID lookup for file ID [${ytId}] returned invalid result [${channelId}]"
-                (( n++ ))
-                continue
-            fi
-            # Start by getting our save path from the DB
-            chanDir="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId}';")"
-            # Then get our clean channel name
-            channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId}';")"
-            # Then get our clean file name title
-            vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId}';")"
-            # Finally, get our audio output format
-            audioOutput="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
-            if ! [[ "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}" == "${newAudioMediaPath[_${ytId}]}" ]]; then
-                # It's not in the right place. Let's move it.
-                # Make sure the destination exists
-                if ! [[ -d "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]" ]]; then
-                    # Make the destination directory
-                    if ! mkdir -p "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]"; then
-                        badExit "192" "Unable to create directory [${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]]"
-                    fi            
-                    # If we had an artist.jpg, move it
-                    if [[ -e "${newAudioMediaPath[_${ytId}]%/*/*}/artist.jpg" ]]; then
-                        if ! mv "${newAudioMediaPath[_${ytId}]%/*/*}/artist.jpg" "${audioOutputDir}/${chanDir}/artist.jpg"; then
-                            badExit "193" "Unable to correct artist cover [${newAudioMediaPath[_${ytId}]%/*/*}/artist.jpg] to [${audioOutputDir}/${chanDir}/artist.jpg]"
-                        fi
-                    fi
-                    # If we had a background.jpg, move it
-                    if [[ -e "${newAudioMediaPath[_${ytId}]%/*/*}/background.jpg" ]]; then
-                        if ! mv "${newAudioMediaPath[_${ytId}]%/*/*}/background.jpg" "${audioOutputDir}/${chanDir}/background.jpg"; then
-                            badExit "194" "Unable to correct background [${newAudioMediaPath[_${ytId}]%/*/*}background.jpg] to [${audioOutputDir}/${chanDir}/background.jpg]"
-                        fi
-                    fi
-                fi
-                # Move the file
-                if ! mv "${newAudioMediaPath[_${ytId}]}" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}"; then
-                    badExit "195" "Unable to correct found file [${newAudioMediaPath[_${ytId}]}] to [${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}]"
-                fi
-                # If it had a thumbnail, move that too
-                if [[ -e "${newAudioMediaPath[_${ytId}]%/*}/cover.jpg" ]]; then
-                    if ! mv "${newAudioMediaPath[_${ytId}]%/*}/cover.jpg" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/cover.jpg"; then
-                        badExit "196" "Unable to correct album cover [${newAudioMediaPath[_${ytId}]%/*}/cover.jpg] to [${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/cover.jpg]"
-                    fi
-                fi
-                printOutput "3" "Corrected found file location for audio file ID [${ytId}]"
-            fi
+    if [[ "${#knownFiles[@]}" -ne "0" ]]; then
+        printOutput "1" "Failed to locate [${#knownFiles[@]}] files on filesystem but not in Plex"
+        for i in "${!knownFiles[@]}"; do
+            i="${i#_}"
+            printOutput "1" "${i}"
         done
     fi
-    
-    unset newMediaType
-    verifyMedia="0"
 fi
 
 if [[ "${updateRatingKeys}" -eq "1" ]]; then
     printOutput "3" "################ Verifying rating keys ################"
-    # Update all rating keys for the video library in database
-    printOutput "3" "Updating rating keys for video library"
-    # Get a list of shows in the database
-    while read -r i; do
-        chanPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${i}';")"
-        if [[ -z "${chanPath}" ]]; then
-            badExit "197" "Unable to obtain file path for channel ID [${i}]"
+    # Update all rating keys for all channels in Plex
+    # Get a list of shows from the database
+    callCurlGet "${plexAdd}/library/sections/${libraryId}/all?X-Plex-Token=${plexToken}"
+    while read -r ratingKey; do
+        ## Get a list of seasons for that show
+        callCurlGet "${plexAdd}/library/metadata/${ratingKey}/children?X-Plex-Token=${plexToken}"
+        ## Get the show name, for printing
+        seriesTitle="$(yq -p xml ".MediaContainer.\"+@parentTitle\"" <<<"${curlOutput}")"
+        ## Get the first season
+        firstYear="$(yq -p xml ".MediaContainer.Directory  | ([] + .) | .[0].\"+@index\"" <<<"${curlOutput}")"
+        ## Get the first season rating key
+        firstYearKey="$(yq -p xml ".MediaContainer.Directory  | ([] + .) | .[0].\"+@ratingKey\"" <<<"${curlOutput}")"
+        if [[ "${firstYear}" == "null" ]]; then
+            firstYear="$(yq -p xml ".MediaContainer.Directory  | ([] + .) | .[1].\"+@index\"" <<<"${curlOutput}")"
+            firstYearKey="$(yq -p xml ".MediaContainer.Directory  | ([] + .) | .[1].\"+@ratingKey\"" <<<"${curlOutput}")"
         fi
-        # We only need to check it, if the output directory actually exists
-        if [[ -d "${videoOutputDir}/${chanPath}" ]]; then
-            chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${i}';")"
-            if [[ -z "${chanName}" ]]; then
-                badExit "198" "Unable to obtain channel name for channel ID [${i}]"
-            fi
-            dbVidSeriesArr["${i}"]="${chanName}"
-        fi
-    done < <(sqDb "SELECT DISTINCT CHANNEL_ID FROM source_videos WHERE VID_FORMAT != 'none';")
-    # Now we have an associative array of dbVidSeriesArr[chanId]="chan name" we can use to systematically eliminate channels we update
-    # This will help us make sure we don't miss any
-
-    # Get a list of series rating keys in Plex
-    callCurl "${plexAdd}/library/sections/${videoLibraryId}/all?X-Plex-Token=${plexToken}"
-    readarray -t plexSeriesArr < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-
-    if [[ "${#plexSeriesArr[@]}" -eq "0" ]]; then
-        printOutput "2" "No items found in video library"
-    else
-        # Remove all the old rating keys
-        sqDb "DELETE FROM video_rating_key_by_channel;"
-        sqDb "DELETE FROM video_rating_key_by_season;"
-        sqDb "DELETE FROM video_rating_key_by_item;"
-        # Make sure Plex is aware of all media in the library
-        refreshLibrary "${videoLibraryId}"
-        # Rule of thumb: Wait 30 seconds per series, minimum of 30 seconds, maximum of 10 minutes
-        scanWait="$(( ${#plexSeriesArr[@]} * 30 ))"
-        if [[ "${scanWait}" -lt "30" ]]; then
-            scanWait="30"
-        elif [[ "${scanWait}" -gt "600" ]]; then
-            scanWait="600"
-        fi
-        printOutput "4" "Waiting [${scanWait}] seconds for Plex Media Scanner to update video file library"
-        sleep "${scanWait}"
-    fi
-
-    printOutput "3" "Updating rating keys for [${#plexSeriesArr[@]}] series"
-    for i in "${plexSeriesArr[@]}"; do
-        # Recycling variables is bad, m'kay?
-        unset foundSeriesKey seasonYearArr plexSeasonArr
-
-        printOutput "4" "Processing video series rating key [${i}]"
-        # For each series, get a list of seasons
-        callCurl "${plexAdd}/library/metadata/${i}/children?X-Plex-Token=${plexToken}"
-        while read -r ii; do
-            if ! [[ "${ii}" == "null" ]]; then
-                plexSeasonArr+=("${ii}")
-            fi
-        done < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-        # Also get a corresponding list of years for each of those seasons
-        for ii in "${plexSeasonArr[@]}"; do
-            seasonYearArr["${ii}"]="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${ii}\" ) .\"+@index\"" <<<"${curlOutput}")"
-        done
-        # For each season, get a list of episodes
-        for ii in "${plexSeasonArr[@]}"; do
-            unset plexEpisodeArr
-            printOutput "5" "Processing video season rating key [${ii}]"
-            # Get the file list for the season
-            callCurl "${plexAdd}/library/metadata/${ii}/children?X-Plex-Token=${plexToken}"
-            while read -r iii; do
-                if ! [[ "${iii}" == "null" ]]; then
-                    plexEpisodeArr+=("${iii}")
-                fi
-            done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-            # For each episode rating key
-            for iii in "${plexEpisodeArr[@]}"; do
-                printOutput "5" "Processing video file rating key [${iii}]"
-                # Isolate the file ID
-                foundFileId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${iii}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                foundFileId="${foundFileId%\]\.*}"
-                foundFileId="${foundFileId##*\[}"
-                # Now we've isolated the file ID, let's set it in the database
-                videoFileRatingKey["_${foundFileId}"]="${iii}"
-
-                # Safety check
-                if [[ -z "${foundFileId}" ]]; then
-                    printOutput "1" "Null file ID key returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}] -- Do multiple files exist for this item?"
-                    continue 3
-                fi
-
-                dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE RATING_KEY = '${iii}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It does not exist in the database, use an 'insert'
-                    if sqDb "INSERT INTO video_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${iii}', '${foundFileId}', $(date +%s));"; then
-                        printOutput "5" "Added file rating key [${iii}] to database"
-                    else
-                        badExit "199" "Adding file rating key [${iii}] to database failed"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # It exists in the database, use an 'update'
-                    if sqDb "UPDATE video_rating_key_by_item SET ID = '${foundFileId}', UPDATED = $(date +%s) WHERE RATING_KEY = '${iii}';"; then
-                        printOutput "5" "Added file rating key [${iii}] to database"
-                    else
-                        badExit "200" "Adding file rating key [${iii}] to database failed"
-                    fi
-                else
-                    badExit "201" "Database count for file ID [${iii}] in video_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                fi
-
-                # If we haven't set our 'foundSeriesKey', let's set it now
-                if [[ -z "${foundSeriesKey}" ]]; then
-                    foundSeriesKey="${i}"
-                    # Add it to the database
-                    # We need the channel ID
-                    channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${foundFileId}';")"
-
-                    # Safety check
-                    if [[ -z "${channelId}" ]]; then
-                        printOutput "1" "Null channel ID returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}][fID:${foundFileId}]}"
-                        continue 3
-                    fi
-
-                    dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_channel WHERE RATING_KEY = '${foundSeriesKey}';")"
-                    if [[ "${dbCount}" -eq "0" ]]; then
-                        # It does not exist in the database, use an 'insert'
-                        if sqDb "INSERT INTO video_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES ('${foundSeriesKey}', '${channelId}', $(date +%s));"; then
-                            printOutput "5" "Added show rating key [${foundSeriesKey}] to database"
-                        else
-                            badExit "202" "Adding show rating key [${foundSeriesKey}] to database failed"
-                        fi
-                    elif [[ "${dbCount}" -eq "1" ]]; then
-                        # It exists in the database, use an 'update'
-                        if sqDb "UPDATE video_rating_key_by_channel SET CHANNEL_ID = '${channelId}', UPDATED = $(date +%s) WHERE RATING_KEY = '${foundSeriesKey}';"; then
-                            printOutput "5" "Added show rating key [${foundSeriesKey}] to database"
-                        else
-                            badExit "203" "Adding show rating key [${foundSeriesKey}] to database failed"
-                        fi
-                    else
-                        badExit "204" "Database count for show ID [${foundSeriesKey}] in video_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                    fi
-
-                    # Remove this series from our list of series we haven't updated
-                    unset dbVidSeriesArr["${channelId}"]
-                fi
-            done
-
-            # We should now have an assigned channel ID, so let's update the season's rating key as well
-
-            # Safety check
-            if [[ -z "${channelId}" ]]; then
-                printOutput "1" "Null channel ID returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}][fID:${foundFileId}]}"
-                continue 3
-            fi
-            if [[ -z "${seasonYearArr[${ii}]}" ]]; then
-                printOutput "1" "Null year returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}][fID:${foundFileId}]}"
-                continue 3
-            fi
-
-            dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_season WHERE RATING_KEY = '${ii}';")"
-            if [[ "${dbCount}" -eq "0" ]]; then
-                # It does not exist in the database, use an 'insert'
-                if sqDb "INSERT INTO video_rating_key_by_season (RATING_KEY, YEAR, CHANNEL_ID, UPDATED) VALUES ('${ii}', ${seasonYearArr[${ii}]}, '${channelId}', $(date +%s));"; then
-                    printOutput "5" "Added season rating key [${ii}] to database"
-                else
-                    badExit "205" "Adding season rating key [${ii}] to database failed"
-                fi
-            elif [[ "${dbCount}" -eq "1" ]]; then
-                # It exists in the database, use an 'update'
-                if sqDb "UPDATE video_rating_key_by_season SET CHANNEL_ID = '${channelId}', YEAR = ${seasonYearArr[${ii}]}, UPDATED = $(date +%s) WHERE RATING_KEY = '${ii}';"; then
-                    printOutput "5" "Added season rating key [${ii}] to database"
-                else
-                    badExit "206" "Adding season rating key [${ii}] to database failed"
-                fi
+        printOutput "4" "Looking up series [${seriesTitle}] via rating key [${ratingKey}] with season year [${firstYear}] via rating key [${firstYearKey}]"
+        ## Get the first file of the first season
+        callCurlGet "${plexAdd}/library/metadata/${firstYearKey}/children?X-Plex-Token=${plexToken}"
+        firstFileId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[0].Media.Part.\"+@file\"" <<<"${curlOutput}")"
+        firstFileId="${firstFileId%\]\.mp4}"
+        firstFileId="${firstFileId##*\[}"
+        ## Now look up that file ID in the database for its CHANNEL_ID
+        firstFileChannelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${firstFileId//\'/\'\'}';")"
+        ## Now get the rating key for that channel ID in the database
+        readarray -t foundRatingKey < <(sqDb "SELECT RATING_KEY FROM rating_key WHERE CHANNEL_ID = '${firstFileChannelId//\'/\'\'}';")
+        if [[ "${#foundRatingKey[@]}" -eq "0" ]]; then
+            ### Doesn't exist in the database
+            printOutput "5" "No rating keys found in database for series [${seriesTitle}]"
+            if sqDb "INSERT INTO rating_key (CHANNEL_ID, RATING_KEY, UPDATED) VALUES ('${firstFileChannelId//\'/\'\'}', ${ratingKey}, $(date +%s));"; then
+                printOutput "3" "Added rating key [${ratingKey}] for series [${seriesTitle}] to database"
             else
-                badExit "207" "Database count for season ID [${ii}] in video_rating_key_by_season table returned greater than 1 -- Possible database corruption"
+                printOutput "1" "Failed to add rating key [${ratingKey}] for series [${seriesTitle}] to database"
             fi
-        done
-    done
-
-    for key in "${!dbVidSeriesArr[@]}"; do
-        printOutput "1" "Unable to locate videos for channel ID [${key}] [${dbVidSeriesArr[${key}]}] in Plex"
-    done
-
-    # Update all rating keys for the audio library in database
-    printOutput "3" "Updating rating keys for audio library"
-    # Get a list of shows in the database
-    while read -r i; do
-        chanPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${i}';")"
-        if [[ -z "${chanPath}" ]]; then
-            badExit "208" "Unable to obtain file path for channel ID [${i}]"
-        fi
-        # We only need to check it if the output directory actually exists
-        if [[ -d "${audioOutputDir}/${chanPath}" ]]; then
-            chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${i}';")"
-            if [[ -z "${chanName}" ]]; then
-                badExit "209" "Unable to obtain channel name for channel ID [${i}]"
+        elif [[ "${#foundRatingKey[@]}" -eq "1" ]]; then
+            ### Something exists. Compare.
+            if [[ "${foundRatingKey[0]}" -eq "${ratingKey}" ]]; then
+                #### Matches
+                printOutput "3" "Verified existing rating key [${ratingKey}] for series [${seriesTitle}]"
+            else
+                #### Mismatch. Update.
+                if sqDb "UPDATE rating_key SET RATING_KEY = ${ratingKey}, UPDATED = '$(date +%s)' WHERE ID = '${firstFileChannelId//\'/\'\'}';"; then
+                    printOutput "5" "Updated stale rating key for series [${seriesTitle}] from [${foundRatingKey}] to [${ratingKey}]"
+                else
+                    printOutput "1" "Failed to update stale rating key for series [${seriesTitle}] from [${foundRatingKey}] to [${ratingKey}]"
+                fi
             fi
-            dbAudSeriesArr["${i}"]="${chanName}"
+        else
+            printOutput "1" "Unexpected count [${#foundRatingKey[@]}] when looking up rating key for channel ID [${firstFileChannelId}] - [${foundRatingKey[*]}]"
         fi
-    done < <(sqDb "SELECT DISTINCT CHANNEL_ID FROM source_videos WHERE AUD_FORMAT != 'none';")
-    # Now we have an associative array of dbAudSeriesArr[chanId]="chan name" we can use to systematically eliminate channels we update
-    # This will help us make sure we don't miss any
-
-    # Get a list of series rating keys in Plex
-    callCurl "${plexAdd}/library/sections/${audioLibraryId}/all?X-Plex-Token=${plexToken}"
-    readarray -t plexMusicArr < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-
-    if [[ "${#plexMusicArr[@]}" -eq "0" ]]; then
-        printOutput "2" "No items found in audio library"
-    else
-        # Remove all the old rating keys
-        sqDb "DELETE FROM audio_rating_key_by_channel;"
-        sqDb "DELETE FROM audio_rating_key_by_album;"
-        sqDb "DELETE FROM audio_rating_key_by_item;"
-        # Make sure Plex is aware of all media in the library
-        refreshLibrary "${audioLibraryId}"
-        # Rule of thumb: Wait 10 seconds per series, minimum of 30 seconds, maximum of 10 minutes
-        scanWait="$(( ${#plexMusicArr[@]} * 10 ))"
-        if [[ "${scanWait}" -lt "30" ]]; then
-            scanWait="30"
-        elif [[ "${scanWait}" -gt "600" ]]; then
-            scanWait="600"
-        fi
-        printOutput "4" "Waiting [${scanWait}] seconds for Plex Media Scanner to update audio file library"
-        sleep "${scanWait}"
-    fi
-
-    printOutput "3" "Updating rating keys for [${#plexMusicArr[@]}] artists"
-    for i in "${plexMusicArr[@]}"; do
-        # Recycling variables is bad, m'kay?
-        unset albumYearArr plexAlbumArr
-
-        printOutput "4" "Processing audio series rating key [${i}]"
-        # For each series, get a list of seasons
-        callCurl "${plexAdd}/library/metadata/${i}/children?X-Plex-Token=${plexToken}"
-        while read -r ii; do
-            if ! [[ "${ii}" == "null" ]]; then
-                plexAlbumArr+=("${ii}")
-            fi
-        done < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-        # For each season, get a list of episodes
-        for ii in "${plexAlbumArr[@]}"; do
-            unset plexTrackArr
-            printOutput "5" "Processing audio album rating key [${ii}]"
-            # Get the file list for the season
-            callCurl "${plexAdd}/library/metadata/${ii}/children?X-Plex-Token=${plexToken}"
-            while read -r iii; do
-                if ! [[ "${iii}" == "null" ]]; then
-                    plexTrackArr+=("${iii}")
-                fi
-            done < <(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-            # For each episode rating key
-            for iii in "${plexTrackArr[@]}"; do
-                printOutput "5" "Processing track file rating key [${iii}]"
-                # Isolate the file ID
-                foundFileId="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${iii}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                foundFileId="${foundFileId%\].*}"
-                foundFileId="${foundFileId##*\[}"
-
-                # Safety check
-                if [[ -z "${foundFileId}" ]]; then
-                    printOutput "1" "Null file ID key returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}]"
-                    continue 3
-                fi
-
-                # Now we've isolated the file ID, let's set it in the database
-                dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_item WHERE RATING_KEY = '${iii}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It does not exist in the database, use an 'insert'
-                    if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES ('${iii}', '${foundFileId}', $(date +%s));"; then
-                        printOutput "5" "Added file rating key [${iii}] to database"
-                    else
-                        badExit "210" "Adding file rating key [${iii}] to database failed"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # It exists in the database, use an 'update'
-                    if sqDb "UPDATE audio_rating_key_by_item SET ID = '${foundFileId}', UPDATED = $(date +%s) WHERE RATING_KEY = '${iii}';"; then
-                        printOutput "5" "Added file rating key [${iii}] to database"
-                    else
-                        badExit "211" "Adding file rating key [${iii}] to database failed"
-                    fi
-                else
-                    badExit "212" "Database count for file ID [${iii}] in audio_rating_key_by_item table returned greater than 1 -- Possible database corruption"
-                fi
-
-                foundArtistKey="${i}"
-                # Add it to the database
-                # We need the channel ID
-                channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${foundFileId}';")"
-
-                # Safety check
-                if [[ -z "${channelId}" ]]; then
-                    printOutput "1" "Null channel ID returned [seriesRK:${i}][seasonRK:${ii}][itemRK:${iii}][fID:${foundFileId}]}"
-                fi
-
-                dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_channel WHERE RATING_KEY = '${foundArtistKey}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It does not exist in the database, use an 'insert'
-                    if sqDb "INSERT INTO audio_rating_key_by_channel (RATING_KEY, CHANNEL_ID, UPDATED) VALUES ('${foundArtistKey}', '${channelId}', $(date +%s));"; then
-                        printOutput "5" "Added album rating key [${foundArtistKey}] to database"
-                    else
-                        badExit "213" "Adding album rating key [${foundArtistKey}] to database failed"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # It exists in the database, use an 'update'
-                    if sqDb "UPDATE audio_rating_key_by_channel SET CHANNEL_ID = '${channelId}', UPDATED = $(date +%s) WHERE RATING_KEY = '${foundArtistKey}';"; then
-                        printOutput "5" "Added album rating key [${foundArtistKey}] to database"
-                    else
-                        badExit "214" "Adding album rating key [${foundArtistKey}] to database failed"
-                    fi
-                else
-                    badExit "215" "Database count for album ID [${foundArtistKey}] in audio_rating_key_by_channel table returned greater than 1 -- Possible database corruption"
-                fi
-
-                # We should now have an assigned file ID, so let's update the season's rating key as well
-
-                dbCount="$(sqDb "SELECT COUNT(1) FROM audio_rating_key_by_album WHERE RATING_KEY = '${ii}';")"
-                if [[ "${dbCount}" -eq "0" ]]; then
-                    # It does not exist in the database, use an 'insert'
-                    if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, ID, UPDATED) VALUES ('${ii}', '${foundFileId}', $(date +%s));"; then
-                        printOutput "5" "Added season rating key [${ii}] to database"
-                    else
-                        badExit "216" "Adding season rating key [${ii}] to database failed"
-                    fi
-                elif [[ "${dbCount}" -eq "1" ]]; then
-                    # It exists in the database, use an 'update'
-                    if sqDb "UPDATE audio_rating_key_by_album SET ID = '${foundFileId}', UPDATED = $(date +%s) WHERE RATING_KEY = '${ii}';"; then
-                        printOutput "5" "Added season rating key [${ii}] to database"
-                    else
-                        badExit "217" "Adding season rating key [${ii}] to database failed"
-                    fi
-                else
-                    badExit "218" "Database count for season ID [${ii}] in audio_rating_key_by_album table returned greater than 1 -- Possible database corruption"
-                fi
-
-                # Remove this series from our list of series we haven't updated
-                unset dbAudSeriesArr["${channelId}"]
-            done
-        done
-    done
-
-    for key in "${!dbAudSeriesArr[@]}"; do
-        printOutput "1" "Unable to locate tracks for channel ID [${key}] [${dbAudSeriesArr[${key}]}] in Plex"
-    done
+    done < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
 fi
 
 if [[ "${updateMetadata}" -eq "1" ]]; then
     printOutput "3" "################## Updating metadata ##################"
+    # Get a list of all series rating keys so we can double check we're actually updating them all
+    callCurlGet "${plexAdd}/library/sections/${libraryId}/all?X-Plex-Token=${plexToken}"
+    declare -A dblChk
+    while read -r i title; do
+        dblChk["${i}"]="${title}"
+    done < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | ( .\"+@ratingKey\" + \" \" + .\"+@title\" )" <<<"${curlOutput}")
     # Update all channel information in database
-    readarray -t chanIds < <(sqDb "SELECT ID FROM source_channels;")
-    for channelId in "${chanIds[@]}"; do
-        if ! getChannelInfo "${channelId}"; then
-            printOutput "1" "Failed to retrieve channel info for [${channelId}]"
+    printOutput "3" "Processing channels in database"
+    while read -r channelId; do
+        chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        printOutput "4" "Updating database information for channel ID [${channelId}] [${chanName}]"
+        if channelToDb "${channelId}"; then
+            channelRatingKey="$(sqDb "SELECT RATING_KEY FROM rating_key WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
+            unset dblChk["${channelRatingKey}"]
+        else
+            printOutput "1" "Failed to update database for channel ID [${channelId}] [${chanName}]"
         fi
-    done
-
+    done < <(sqDb "SELECT ID FROM source_channels;")
     # Update all playlist information in database
-    readarray -t plIds < <(sqDb "SELECT ID FROM source_playlists;")
-    for plId in "${plIds[@]}"; do
-        if ! getPlaylistInfo "${plId}"; then
-            printOutput "1" "Failed to retrieve playlist info for [${plId}]"
+    printOutput "3" "Processing playlists in database"
+    while read -r plId; do
+        plName="$(sqDb "SELECT NAME FROM source_playlists WHERE ID = '${plId//\'/\'\'}';")"
+        printOutput "4" "Updating database information for playlist ID [${plId}] [${plName}]"
+        playlistToDb "${plId}"
+    done < <(sqDb "SELECT ID FROM source_playlists;")
+    # Update all channel images, banner images, season images
+    printOutput "3" "Updating series media images"
+    while read -r channelId; do
+        chanName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        printOutput "4" "Updating series images for channel ID [${channelId}] [${chanName}]"
+        # Get a list of seasons for the series
+        readarray -t seasonYears < <(sqDb "SELECT DISTINCT YEAR FROM source_videos WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")
+        # Create the series image
+        makeShowImage "${channelId}"
+        # Create the season images
+        for year in "${seasonYears[@]}"; do
+            makeSeasonImage "${channelId}" "${year}"
+        done
+    done < <(sqDb "SELECT ID FROM source_channels;")
+    # Update all video thumbnails
+    printOutput "3" "Updating media thumbnails"
+    while read -r ytId; do
+        printOutput "4" "Updating thumbnail for file ID [${ytId}]"
+        # Get our video channel ID
+        channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Get our video year
+        vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Get our video index
+        vidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Get our video clean title
+        vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Get our channel path
+        channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        # Get our clean channel name
+        channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        
+        # Grab the latest thumbnail
+        callCurlDownload "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"
+        
+        # Compare them
+        if cmp -s "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
+            printOutput "5" "No changes detected for file ID [${ytId}], removing newly downloaded file thumbnail"
+            if ! rm -f "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
+                printOutput "1" "Failed to remove newly downloaded file thumbmail for file ID [${ytId}]"
+            fi
+        else
+            printOutput "4" "New file thumbnail detected for file ID [${ytId}], backing up old image and replacing with new one"
+            if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/.${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].bak-$(date +%s).jpg"; then
+                printOutput "1" "Failed to back up previously downloaded file thumbnail for file ID [${ytId}]"
+            fi
+            if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
+                printOutput "1" "Failed to move newly downloaded show image file for channel ID [${1}]"
+            else
+                printOutput "3" "Updated thumbnail for file ID [${ytId}]"
+            fi
         fi
-    done
-
+        
+        if ! [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
+            printOutput "1" "Failed to get thumbnail for file ID [${tmpId}]"
+        fi
+    done < <(sqDb "SELECT ID FROM source_videos;")
+    
     # Update all series metadata in Plex
-    readarray -t plexSeries < <(sqDb "SELECT RATING_KEY FROM video_rating_key_by_channel;")
-    for ratingKey in "${plexSeries[@]}"; do
-        if ! setSeriesMetadata "${ratingKey}"; then
-            printOutput "1" "Failed to update metadata for series rating key [${ratingKey}]"
-        fi
-    done
-
-    # Update all artist metadata in Plex
-    readarray -t plexArtists < <(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel;")
-    for ratingKey in "${plexArtists[@]}"; do
-        if ! setArtistMetadata "${ratingKey}"; then
-            printOutput "1" "Failed to update metadata for artist rating key [${ratingKey}]"
-        fi
-    done
-
-    # Update all album metadata in Plex
-    readarray -t plexAlbums < <(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_album;")
-    for ratingKey in "${plexAlbums[@]}"; do
-        if ! setAlbumMetadata "${ratingKey}"; then
-            printOutput "1" "Failed to update metadata for album rating key [${ratingKey}]"
-        fi
-    done
-
+    printOutput "3" "Setting series metadata in PMS"
+    while read -r channelId; do
+        printOutput "4" "Updating metadata for channel ID [${channelId}]"
+        # Get the series rating key
+        channelRatingKey="$(sqDb "SELECT RATING_KEY FROM rating_key WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
+        setSeriesMetadata "${channelRatingKey}"
+    done < <(sqDb "SELECT ID FROM source_channels;")
+    
+    # Update all collection descriptions and images in Plex
+    printOutput "5" "TODO: Finish this"
     # Update all playlist descriptions and images in Plex
-    readarray -t plexPlaylists < <(sqDb "SELECT ID FROM source_playlists;")
-    for plId in "${plexPlaylists[@]}"; do
-        # Update its info
-        getPlaylistInfo "${plId}"
-        # See if it has a video rating key
-        plVidRk="$(sqDb "SELECT VID_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"
-        # See if it has an audio rating key
-        plAudRk="$(sqDb "SELECT AUD_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"
-        if [[ -n "${plVidRk}" ]]; then
-            updatePlaylistInfo "${plId}" "${plVidRk}"
+    printOutput "5" "TODO: Finish this"
+    
+    if [[ "${#dblChk[@]}" -ne "0" ]]; then
+        printOutput "1" "Failed to update the following Plex series:"
+        for title in "${dblChk[@]}"; do
+            printOutput "1" "${title}"
+        done
+    else
+        printOutput "3" "Successfully updated all series in Plex"
+    fi
+fi
+
+if [[ "${importMedia}" -eq "1" ]]; then
+    printOutput "3" "############# Checking for files to import ############"
+    # Start by searching the import directory for files to import
+    printOutput "5" "Found import dir: ${importDir}"
+    # Make sure the import dir actually exists
+    if ! [[ -d "${importDir}" ]]; then
+        printOutput "1" "Import directory [${importDir}] does not appear to actually exist -- Skipping import"
+    else
+        # Find the files to import
+        readarray -t importArr < <(find "${importDir}" -type f -regextype egrep -regex "^.*\[([A-Za-z0-9_-]{11})\]\.mp4")
+        printOutput "3" "Found [${#importArr[@]}] files to import"
+        # Set some global variables for these imported files
+        # Set 'outputResolution' based on ffprobe for each imported video file
+        markWatched="false"
+        includeShorts="true"
+        includeLiveBroadcasts="true"
+        sponsorblockEnable="disable"
+        sponsorblockRequire="false"
+        n="1"
+        for f in "${importArr[@]}"; do
+            ytId="${f%\]\.mp4}"
+            ytId="${ytId##*\[}"
+            printOutput "4" "Processing file ID [${ytId}] [Item ${n} of ${#importArr[@]}]"
+            (( n++ ))
+            
+            # If it's already in the database, we can skip it
+            dbCount="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            if [[ "${dbCount}" -eq "0" ]]; then
+                # Safety check
+                true
+            elif [[ "${dbCount}" -eq "1" ]]; then
+                printOutput "3" "File ID already present in database -- Skipping import"
+            else
+                badExit "82" "Unexpected count returned [${dbCount}] for file ID [${ytId}] -- Possible database corruption"
+            fi
+            
+            # Set its resolution
+            outputResolution="import"
+            
+            # Now add the file to our database
+            ytIdToDb "${ytId}" "import" "${f}"
+        done
+    fi
+fi
+
+printOutput "3" "############### Processing media sources ##############"
+while read -r source; do
+    # Unset some variables we need to be able to be blank
+    unset videoArr itemType channelId plId ytId
+    # Unset some variables from the previous source
+    unset sourceUrl outputResolution markWatched includeShorts includeLiveBroadcasts sponsorblockEnable sponsorblockEnable
+    printOutput "3" "Processing source: ${source##*/}"
+    source "${source}"
+    
+    if [[ -z "${sourceUrl}" ]]; then
+        printOutput "1" "No source URL provided in input file [${source##*/}]"
+        continue
+    fi
+
+    printOutput "4" "Validating source config"
+    # Verify source config options
+    if [[ -z "${sourceUrl}" ]]; then
+        printOutput "1" "No source URL provided in source file [${source}] -- Skipping"
+    fi
+    
+    # Start with video output resolution
+    if [[ "${outputResolution,,}" == "none" ]]; then
+        outputResolution="none"
+    elif [[ "${outputResolution,,}" == "144p" ]]; then
+        outputResolution="144"
+    elif [[ "${outputResolution,,}" == "240p" ]]; then
+        outputResolution="240"
+    elif [[ "${outputResolution,,}" == "360p" ]]; then
+        outputResolution="360"
+    elif [[ "${outputResolution,,}" == "480p" ]]; then
+        outputResolution="480"
+    elif [[ "${outputResolution,,}" == "720p" ]]; then
+        outputResolution="720"
+    elif [[ "${outputResolution,,}" == "1080p" ]]; then
+        outputResolution="1080"
+    elif [[ "${outputResolution,,}" == "1440p" || "${outputResolution,,}" == "2k" ]]; then
+        outputResolution="1440"
+    elif [[ "${outputResolution,,}" == "2160p" || "${outputResolution,,}" == "4k" ]]; then
+        outputResolution="2160"
+    elif [[ "${outputResolution,,}" == "4320p" || "${outputResolution,,}" == "8k" ]]; then
+        outputResolution="4320"
+    elif [[ "${outputResolution,,}" == "original" ]]; then
+        outputResolution="original"
+    else
+        outputResolution="original"
+    fi
+    printOutput "5" "Video output [${outputResolution}]"
+    
+    # Mark as watched on import?
+    if ! [[ "${markWatched,,}" == "true" ]]; then
+        markWatched="false"
+    else
+        markWatched="${markWatched,,}"
+    fi
+    printOutput "5" "Mark as watched on import [${markWatched}]"
+    
+    # Include shorts?
+    if ! [[ "${includeShorts,,}" == "true" ]]; then
+        includeShorts="false"
+    else
+        includeShorts="${includeShorts,,}"
+    fi
+    printOutput "5" "Include shorts [${includeShorts}]"
+    
+    # Include live broadcasts?
+    if ! [[ "${includeLiveBroadcasts,,}" == "true" ]]; then
+        includeLiveBroadcasts="false"
+    else
+        includeLiveBroadcasts="${includeLiveBroadcasts,,}"
+    fi
+    printOutput "5" "Include live broadcasts [${includeLiveBroadcasts}]"
+    
+    # Enable sponsorblock?
+    if ! [[ "${sponsorblockEnable,,}" =~ ^(mark|remove)$ ]]; then
+        sponsorblockEnable="disable"
+    else
+        sponsorblockEnable="${sponsorblockEnable,,}"
+    fi
+    printOutput "5" "Enable sponsorblock [${sponsorblockEnable}]"
+    
+    # If enabled, require sponsorblock?
+    if [[ "${sponsorblockRequire,,}" =~ ^(mark|remove)$ ]]; then
+        if ! [[ "${sponsorblockRequire,,}" == "true" ]]; then
+            sponsorblockRequire="false"
+        else
+            sponsorblockRequire="${sponsorblockRequire,,}"
         fi
-        if [[ -n "${plAudRk}" ]]; then
-            updatePlaylistInfo "${plId}" "${plAudRk}"
+    fi
+    printOutput "5" "Require sponsorblock [${sponsorblockRequire}]"        
+
+    # Parse the source URL
+    printOutput "4" "Parsing source URL [${sourceUrl}]"
+    id="${sourceUrl#http:\/\/}"
+    id="${id#https:\/\/}"
+    id="${id#m\.}"
+    id="${id#www\.}"
+    if [[ "${id:0:8}" == "youtu.be" ]]; then
+        # I think these short URL's can only be a video ID?
+        itemType="video"
+        ytId="${id:9:11}"
+        printOutput "4" "Found file ID [${ytId}]"
+    elif [[ "${id:12:6}" == "shorts" ]]; then
+        # This is a video ID for a short
+        itemType="video"
+        ytId="${id:19:11}"
+        printOutput "4" "Found short file ID [${ytId}]"
+    elif [[ "${id:0:8}" == "youtube." ]]; then
+        # This can be a video ID (normal, live, or short), a channel ID, a channel name, or a playlist
+        if [[ "${id:12:1}" == "@" ]]; then
+            printOutput "4" "Found username"
+            # It's a username
+            ytId="${id:13}"
+            ytId="${ytId%\&*}"
+            ytId="${ytId%\?*}"
+            ytId="${ytId%\/*}"
+            # We have the "@username", we need the channel ID
+            # Try using yt-dlp as an API First
+            printOutput "3" "Calling yt-dlp to obtain channel ID from channel handle [@${ytId}]"
+            if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+                channelId="$(yt-dlp -J --playlist-items 0 --cookies "${cookieFile}" "https://www.youtube.com/@${ytId}")"
+            else
+                channelId="$(yt-dlp -J --playlist-items 0 "https://www.youtube.com/@${ytId}")"
+            fi
+            
+            channelId="$(yq -p json ".channel_id" <<<"${channelId}")"
+            if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
+                # We don't, let's try the official API
+                printOutput "3" "Calling API to obtain channel ID from channel handle [@${ytId}]"
+                ytApiCall "channels?forHandle=@${ytId}&part=snippet"
+                apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
+                
+                # Validate it
+                if [[ -z "${apiResults}" ]]; then
+                    printOutput "1" "API lookup for channel ID of handle [${ytId}] returned blank results output (Bad API call?) -- Skipping source"
+                    continue
+                elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+                    # Expected outcome
+                    true
+                elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
+                    printOutput "1" "API lookup for channel ID of handle [${ytId}] returned non-integer results [${apiResults}] -- Skipping source"
+                    continue
+                else
+                    badExit "83" "Impossible condition"
+                fi
+                
+                if [[ "${apiResults}" -eq "0" ]]; then
+                    printOutput "1" "API lookup for source parsing returned zero results -- Skipping source"
+                    continue
+                fi
+                if [[ "$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")" -eq "1" ]]; then
+                    channelId="$(yq -p json ".items[0].id" <<<"${curlOutput}")"
+                    # Validate it
+                    if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
+                        printOutput "1" "Unable to validate channel ID for [@${ytId}] -- Skipping source"
+                        continue
+                    fi
+                else
+                    printOutput "1" "Unable to isolate channel ID for [${sourceUrl}] -- Skipping source"
+                    continue
+                fi
+            fi
+            printAngryWarning
+            printOutput "1" "Refusing to index source with a non-constant URL"
+            printOutput "1" "Channel usernames are less reliable than channel ID's, as usernames can be changed, but ID's can not."
+            printOutput "1" "To have this source indexed, please replacing your source URL:"
+            printOutput "1" "  ${sourceUrl}"
+            printOutput "1" "with its channel ID URL:"
+            printOutput "1" "  https://www.youtube.com/channel/${channelId}"
+            printOutput "2" " "
+            printOutput "3" "Found channel ID [${channelId}] for handle [@${ytId}]"
+            itemType="channel"
+            # Skip this source
+            continue
+        elif [[ "${id:12:8}" == "watch?v=" ]]; then
+            # It's a video ID
+            itemType="video"
+            ytId="${id:20:11}"
+            printOutput "4" "Found video ID [${ytId}]"
+        elif [[ "${id:12:7}" == "channel" ]]; then
+            # It's a channel ID
+            itemType="channel"
+            channelId="${id:20:24}"
+            printOutput "4" "Found channel ID [${channelId}]"
+        elif [[ "${id:12:8}" == "playlist" ]]; then
+            # It's a playlist
+            itemType="playlist"
+            if [[ "${id:26:2}" == "WL" ]]; then
+                # Watch later
+                plId="${id:26:2}"
+            elif [[ "${id:26:2}" == "LL" ]]; then
+                # Liked videos
+                plId="${id:26:2}"
+            elif [[ "${id:26:2}" == "PL" ]]; then
+                # Public playlist?
+                plId="${id:26:34}"
+            fi
+            printOutput "4" "Found playlist [${plId}]"
+        fi
+    else
+        printOutput "1" "Unable to parse input [${id}] -- skipping"
+        continue
+    fi
+
+    if [[ "${itemType}" == "video" ]]; then
+        # Add it to our array of videos to index
+        # Using the keys of an associative array prevents any element from being added multiple times
+        # The array element must be padded with an underscore, or it can be misinterpreted as an integer
+        # Only process the video if it's not accounted for
+        dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ "${dbReply}" -eq "0" ]]; then
+            printOutput "4" "Queueing video ID [${ytId}] for database addition"
+            videoArr+=("${ytId}")
+        elif [[ "${dbReply}" -eq "1" ]]; then
+            # Do we need to replace it based on sponsorblock availability?
+            if ! [[ "${sponsorblockEnable}" == "disable" ]]; then
+                # SponsorBlock is enabled, see if we should upgrade
+                if [[ "${sponsorblockRequire}" == "false" ]]; then
+                    # Yes, we may need to upgrade
+                    # See if we've already pulled the data for the video
+                    sponsorblockAvailable="$(sqDb "SELECT SB_AVAILABLE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+                    if [[ "${sponsorblockAvailable%% \[*}" == "Found" ]]; then
+                        # We can skip it
+                        printOutput "5" "Skipping video ID [${i}] as SponsorBlock criteria already met"
+                        continue
+                    else
+                        # It's not found, add the video to the queue
+                        printOutput "4" "Queueing video ID [${ytId}] to check for SponsorBlock availability"
+                        videoArr+=("${ytId}")
+                    fi
+                fi
+            fi
+        else
+            badExit "84" "Counted [${dbReply}] rows with file ID [${ytId}] -- Possible database corruption"
+        fi
+    elif [[ "${itemType}" == "channel" ]]; then
+        # We should use ${channelId} for the channel ID rather than ${ytId} which could be the handle        
+        # Get a list of the videos for the channel
+        printOutput "3" "Getting video list for channel ID [${channelId}]"
+        if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+            readarray -t chanVidList < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --cookies "${cookieFile}" --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
+        else
+            readarray -t chanVidList < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
+        fi
+        
+        printOutput "4" "Pulled list of [${#chanVidList[@]}] videos from channel"
+        
+        for i in "${chanVidList[@]}"; do
+            # Only process the video if it's not accounted for
+            dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${i//\'/\'\'}';")"
+            if [[ "${dbReply}" -eq "0" ]]; then
+                printOutput "4" "Queueing video ID [${i}] for database addition"
+                videoArr+=("${i}")
+            elif [[ "${dbReply}" -eq "1" ]]; then
+                # Do we need to replace it based on sponsorblock availability?
+                if ! [[ "${sponsorblockEnable}" == "disable" ]]; then
+                    # SponsorBlock is enabled, see if we should upgrade
+                    if [[ "${sponsorblockRequire}" == "false" ]]; then
+                        # Yes, we may need to upgrade
+                        # See if we've already pulled the data for the video
+                        sponsorblockAvailable="$(sqDb "SELECT SB_AVAILABLE FROM source_videos WHERE ID = '${i//\'/\'\'}';")"
+                        if [[ "${sponsorblockAvailable%% \[*}" == "Found" ]]; then
+                            # We can skip it
+                            printOutput "5" "Skipping video ID [${i}] as SponsorBlock criteria already met"
+                            continue
+                        else
+                            # It's not found, add the video to the queue
+                            printOutput "4" "Queueing video ID [${i}] to check for SponsorBlock availability"
+                            videoArr+=("${i}")
+                        fi
+                    fi
+                fi
+            else
+                badExit "85" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
+            fi
+        done
+    elif [[ "${itemType}" == "playlist" ]]; then
+        printOutput "3" "Processing playlist ID [${plId}]"
+
+        # Get a list of videos in the playlist -- Easier/faster to do this via yt-dlp than API
+        if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+            readarray -t plVidList < <(yt-dlp --cookies "${cookieFile}" --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
+        else
+            readarray -t plVidList < <(yt-dlp --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
+        fi
+        
+        printOutput "4" "Pulled list of [${#plVidList[@]}] videos from playlist"
+        
+        # Is the playlist already in our database?
+        dbReply="$(sqDb "SELECT COUNT(1) FROM source_playlists WHERE ID = '${plId}';")"
+        if [[ "${dbReply}" -eq "0" ]]; then
+            # It is not, add it
+            printOutput "4" "Initializing playlist in database"
+            # Make a note that this is a new playlist, so we can initialize it in Plex
+            newPlaylists+=("${plId}")
+            
+            playlistToDb "${plId}"
+            
+            # Add the order of items in the playlist_order table
+            plPos="0"
+            for ytId in "${plVidList[@]}"; do
+                (( plPos++ ))
+                # Add it to the database
+                # Insert what we have
+                if sqDb "INSERT INTO playlist_order (ID, PLAYLIST_KEY, PLAYLIST_INDEX, UPDATED) VALUES ('${ytId}', '${plId//\'/\'\'}', ${plPos}, $(date +%s));"; then
+                    printOutput "3" "Added file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                else
+                    badExit "86" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                fi
+            done
+        elif [[ "${dbReply}" -eq "1" ]]; then
+            # It already exists in the database
+            # Get a list of videos in the database for this playlist (in order)
+            readarray -t dbVidList < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId//\'/\'\'}' ORDER BY PLAYLIST_INDEX ASC;")
+            
+            # Start by comparing the number of items in each array
+            if [[ "${#plVidList[@]}" -ne "${#dbVidList[@]}" ]]; then
+                # Item count mismatch.
+                # Make a note that we need to update this playlist in Plex
+                updatedPlaylists+=("${plId}")
+                # Dump the DB playlist info and re-add it.
+                printOutput "5" "Playlist item count [${#plVidList[@]}] does not match database item count [${#dbVidList[@]}]"
+                if sqDb "DELETE FROM playlist_order WHERE PLAYLIST_KEY = '${plId//\'/\'\'}';"; then
+                    printOutput "5" "Removed playlist order due to item count mismatch for playlist ID [${plId}] from database"
+                else
+                    badExit "87" "Failed to remove playlist order for playlist ID [${plId}] from database"
+                fi
+                # Add the order of items in the playlist_order table
+                plPos="0"
+                for ytId in "${plVidList[@]}"; do
+                    (( plPos++ ))
+                    # Add it to the database
+                    # Insert what we have
+                    if sqDb "INSERT INTO playlist_order (ID, PLAYLIST_KEY, PLAYLIST_INDEX, UPDATED) VALUES ('${ytId}', '${plId//\'/\'\'}', ${plPos}, $(date +%s));"; then
+                        printOutput "3" "Added file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                    else
+                        badExit "88" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                    fi
+                done
+            else
+                # Item count matches, verify that positions are correct
+                for key in "${!plVidList[@]}"; do
+                    printOutput "5" "Verifying position of [${plVidList[${key}]}] against [${dbVidList[${key}]}]"
+                    if ! [[ "${plVidList[${key}]}" == "${dbVidList[${key}]}" ]]; then
+                        # Does not match.
+                        printOutput "4" "Playlist order mismatch found - Reorganizing playlist order"
+                        # Make a note that we need to update this playlist in Plex
+                        updatedPlaylists+=("${plId}")
+                        # Dump the DB playlist info and re-add it.
+                        printOutput "5" "Playlist key [${key}] with file ID [${plVidList[${key}]}] does not match database file ID [${dbVidList[${key}]}]"
+                        if sqDb "DELETE FROM playlist_order WHERE PLAYLIST_KEY = '${plId//\'/\'\'}';"; then
+                            printOutput "5" "Removed playlist order due to order mismatch for playlist ID [${plId}] from database"
+                        else
+                            badExit "89" "Failed to remove playlist order for playlist ID [${plId}] from database"
+                        fi
+                        # Add the order of items in the playlist_order table
+                        plPos="0"
+                        for ytId in "${plVidList[@]}"; do
+                            (( plPos++ ))
+                            # Add it to the database
+                            # Insert what we have
+                            if sqDb "INSERT INTO playlist_order (ID, PLAYLIST_KEY, PLAYLIST_INDEX, UPDATED) VALUES ('${ytId}', '${plId//\'/\'\'}', ${plPos}, $(date +%s));"; then
+                                printOutput "3" "Updated file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                            else
+                                badExit "90" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                            fi
+                        done
+                        # We can break the loop, as we've just re-done the whole entry
+                        break
+                    fi
+                done    
+            fi
+        elif [[ "${dbReply}" -ge "2" ]]; then
+            badExit "91" "Database query returned [${dbReply}] results -- Possible database corruption"
+        else
+            badExit "92" "Impossible condition"
+        fi
+        
+        for i in "${plVidList[@]}"; do
+            # Only process the video if it's not accounted for
+            dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${i//\'/\'\'}';")"
+            if [[ "${dbReply}" -eq "0" ]]; then
+                printOutput "4" "Queueing video ID [${i}] for database addition"
+                videoArr+=("${i}")
+            elif [[ "${dbReply}" -eq "1" ]]; then
+                # Do we need to replace it based on sponsorblock availability?
+                if ! [[ "${sponsorblockEnable}" == "disable" ]]; then
+                    # SponsorBlock is enabled, see if we should upgrade
+                    if [[ "${sponsorblockRequire}" == "false" ]]; then
+                        # Yes, we may need to upgrade
+                        # See if we've already pulled the data for the video
+                        sponsorblockAvailable="$(sqDb "SELECT SB_AVAILABLE FROM source_videos WHERE ID = '${i//\'/\'\'}';")"
+                        if [[ "${sponsorblockAvailable%% \[*}" == "Found" ]]; then
+                            # We can skip it
+                            printOutput "5" "Skipping video ID [${i}] as SponsorBlock criteria already met"
+                            continue
+                        else
+                            # It's not found, add the video to the queue
+                            printOutput "4" "Queueing video ID [${i}] to check for SponsorBlock availability"
+                            videoArr+=("${i}")
+                        fi
+                    fi
+                fi
+            else
+                badExit "93" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
+            fi
+        done
+    fi
+    
+    if [[ "${#videoArr[@]}" -ne "0" ]]; then
+        printOutput "3" "Processing videos"
+        # Iterate through our video list
+        printOutput "3" "Found [${#videoArr[@]}] video ID's to be processed into database"
+        n="1"
+        for ytId in "${videoArr[@]}"; do
+            printOutput "4" "Adding file ID [${ytId}] to database [Item ${n} of ${#videoArr[@]}]"
+            if ! ytIdToDb "${ytId}"; then
+                printOutput "1" "Failed to add file ID [${ytId}] from source [${source##*/}] to database"
+            fi
+            (( n++ ))
+        done
+    fi
+    
+done < <(find "${realPath%/*}/${scriptName%.bash}.sources/" -type f -name "*.env" | sort -n -k1,1)
+
+if [[ "${#reindexArr[@]}" -ne "0" ]]; then
+    printOutput "3" "############## Updating re-indexed files ##############"
+    for ytId in "${!reindexArr[@]}"; do
+        ytId="${ytId#_}"
+        channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        vidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Move the old file to the new destination
+        if ! mv "${reindexArr[_${ytId}]}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
+            printOutput "1" "Failed to move file ID [${ytId}] from [${reindexArr[_${ytId}]}] to [${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4]"
+        fi
+        if [[ -e "${reindexArr[_${ytId}]%mp4}jpg" ]]; then
+            if ! mv "${reindexArr[_${ytId}]%mp4}jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
+                printOutput "1" "Failed to move thumbnail for file ID [${ytId}] from [${reindexArr[_${ytId}]%mp4}jpg] to [${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg]"
+            fi
+        fi
+        printOutput "3" "Successfully re-indexed file ID [${ytId}]"
+    done
+fi
+
+readarray -t importArr < <(sqDb "SELECT ID FROM source_videos WHERE STATUS = 'import';")
+if [[ "${#importArr[@]}" -ne "0" ]]; then
+    printOutput "3" "################### Importing files ###################"
+    n="1"
+    for ytId in "${importArr[@]}"; do
+        printOutput "3" "Processing file ID [${ytId}] [Item ${n} of ${#importArr[@]}]"
+        (( n++ ))
+        # Get the file origin location
+        moveFrom="$(sqDb "SELECT ERROR FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        # Make sure the file origin actually exists
+        if ! [[ -e "${moveFrom}" ]]; then
+            printOutput "1" "Import file [${moveFrom}] does not appear to exist -- Skipping"
+            continue
+        fi
+        
+        # Build our move-to path
+        channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ -z "${channelId}" ]]; then
+            badExit "94" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
+        fi
+        channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        if [[ -z "${channelPath}" ]]; then
+            badExit "95" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
+        fi
+        channelName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        if [[ -z "${channelName}" ]]; then
+            badExit "96" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
+        fi
+        channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        if [[ -z "${channelNameClean}" ]]; then
+            badExit "97" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
+        fi
+        vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ -z "${vidYear}" ]]; then
+            badExit "98" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
+        fi
+        vidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ -z "${vidIndex}" ]]; then
+            badExit "99" "Unable to determine video index for file ID [${ytId}] -- Possible database corruption"
+        fi
+        vidTitle="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ -z "${vidTitle}" ]]; then
+            badExit "100" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
+        fi
+        vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ -z "${vidTitleClean}" ]]; then
+            badExit "101" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
+        fi
+        
+        # We've got all the things we need, now make sure the destination folder(s) we need exist.
+        # Check if the base channel directory exists
+        if ! [[ -d "${outputDir}/${channelPath}" ]]; then
+            # Create it
+            if ! mkdir -p "${outputDir}/${channelPath}"; then
+                badExit "102" "Unable to create directory [${outputDir}/${channelPath}]"
+            fi
+            newVideoDir+=("${channelId}")
+            
+            # Create the series image
+            makeShowImage "${channelId}"
+        fi
+        
+        # Check to see if the season folder exists
+        if ! [[ -d "${outputDir}/${channelPath}/Season ${vidYear}" ]]; then
+            # Create it
+            if ! mkdir -p "${outputDir}/${channelPath}/Season ${vidYear}"; then
+                badExit "103" "Unable to create directory [${outputDir}/${channelPath}/Season ${vidYear}]"
+            fi
+            
+            # Create the season image
+            makeSeasonImage "${channelId}" "${vidYear}"
+        fi
+        
+        # Move our imported file
+        if ! mv "${moveFrom}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
+            printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${channelPath}/Season ${vidYear}]"
+            vidStatus="import_failed"
+        else
+            vidStatus="downloaded"
+        fi
+        
+        # If we have a thumbnail
+        if [[ -e "${moveFrom%mp4}jpg" ]]; then
+            # Move it
+            if ! mv "${moveFrom%mp4}jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
+                printOutput "1" "Failed to move thumbnail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${channelPath}/Season ${vidYear}]"
+            fi
+        fi
+        if ! [[ -e "${moveFrom%mp4}jpg" ]]; then
+            # Still don't have one, so get it from web
+            printOutput "5" "Pulling thumbail from web"
+            callCurlDownload "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
+            if ! [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
+                printOutput "1" "Failed to get thumbnail for file ID [${ytId}]"
+            fi
+        fi
+
+        if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
+            printOutput "3" "Imported video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
+            if ! sqDb "UPDATE source_videos SET STATUS = '${vidStatus}', ERROR = NULL, UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                badExit "104" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
+            fi
+        else
+            printOutput "1" "Failed to import [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
+            if ! sqDb "UPDATE source_videos SET STATUS = '${vidStatus}', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                badExit "105" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
+            fi
         fi
     done
 fi
 
 if [[ "${skipDownload}" -eq "0" ]]; then
-    for source in "${realPath%/*}/${scriptName%.bash}.sources/"*".env"; do
-        printOutput "3" "############### Processing media sources ##############"
-        # Unset some variables we need to be able to be blank
-        unset itemType videoArr channelId backupVideoArr
-        # Unset some variables from the previous source
-        unset sourceUrl sponsorblockOpts videoOutput audioOutput vidIncludeShorts audIncludeShorts markWatched includeLiveBroadcasts
-        printOutput "3" "Processing source: ${source##*/}"
-        source "${source}"
-        
-        if [[ -z "${sourceUrl}" ]]; then
-            printOutput "1" "No source URL provided in input file [${source##*/}]"
-            continue
-        fi
-
-        printOutput "4" "Validating source config"
-        # Verify source config options
-        if ! [[ "${sponsorblockOpts,,}" =~ ^(mark|remove)$ ]]; then
-            sponsorblockOpts="disable"
-        else
-            sponsorblockOpts="${sponsorblockOpts,,}"
-        fi
-        if ! [[ "${markWatched,,}" == "true" ]]; then
-            markWatched="false"
-        else
-            markWatched="${markWatched,,}"
-        fi
-        if ! [[ "${vidIncludeShorts,,}" == "true" ]]; then
-            vidIncludeShorts="false"
-        else
-            vidIncludeShorts="${vidIncludeShorts,,}"
-        fi
-        if ! [[ "${audIncludeShorts,,}" == "true" ]]; then
-            audIncludeShorts="false"
-        else
-            audIncludeShorts="${audIncludeShorts,,}"
-        fi
-        if ! [[ "${includeLiveBroadcasts,,}" == "true" ]]; then
-            includeLiveBroadcasts="false"
-        else
-            includeLiveBroadcasts="${includeLiveBroadcasts,,}"
-        fi
-
-        if [[ "${videoOutput,,}" == "none" ]]; then
-            videoOutput="none"
-        elif [[ "${videoOutput,,}" == "144p" ]]; then
-            videoOutput="144"
-        elif [[ "${videoOutput,,}" == "240p" ]]; then
-            videoOutput="240"
-        elif [[ "${videoOutput,,}" == "360p" ]]; then
-            videoOutput="360"
-        elif [[ "${videoOutput,,}" == "480p" ]]; then
-            videoOutput="480"
-        elif [[ "${videoOutput,,}" == "720p" ]]; then
-            videoOutput="720"
-        elif [[ "${videoOutput,,}" == "1080p" ]]; then
-            videoOutput="1080"
-        elif [[ "${videoOutput,,}" == "1440p" || "${videoOutput,,}" == "2k" ]]; then
-            videoOutput="1440"
-        elif [[ "${videoOutput,,}" == "2160p" || "${videoOutput,,}" == "4k" ]]; then
-            videoOutput="2160"
-        elif [[ "${videoOutput,,}" == "4320p" || "${videoOutput,,}" == "8k" ]]; then
-            videoOutput="4320"
-        elif [[ "${videoOutput,,}" == "original" ]]; then
-            videoOutput="original"
-        else
-            videoOutput="original"
-        fi
-
-        if [[ "${audioOutput,,}" == "opus" ]]; then
-            audioOutput="opus"
-        elif [[ "${audioOutput,,}" == "mp3" ]]; then
-            audioOutput="mp3"
-        else
-            audioOutput="none"
-        fi
-        printOutput "5" "Validated config options:"
-        printOutput "5" "sponsorblockOpts: ${sponsorblockOpts}"
-        printOutput "5" "markWatched: ${markWatched}"
-        printOutput "5" "vidIncludeShorts: ${vidIncludeShorts}"
-        printOutput "5" "audIncludeShorts: ${audIncludeShorts}"
-        printOutput "5" "includeLiveBroadcasts: ${includeLiveBroadcasts}"
-        printOutput "5" "videoOutput: ${videoOutput}"
-        printOutput "5" "audioOutput: ${audioOutput}"
-
-        # Parse the source URL
-        printOutput "4" "Parsing source URL [${sourceUrl}]"
-        id="${sourceUrl#http:\/\/}"
-        id="${id#https:\/\/}"
-        id="${id#m\.}"
-        id="${id#www\.}"
-        if [[ "${id:0:8}" == "youtu.be" ]]; then
-            # I think these short URL's can only be a video ID?
-            itemType="video"
-            ytId="${id:9:11}"
-            printOutput "4" "Found file ID [${ytId}]"
-        elif [[ "${id:12:6}" == "shorts" ]]; then
-            # This is a video ID for a short
-            itemType="video"
-            ytId="${id:19:11}"
-            printOutput "4" "Found short file ID [${ytId}]"
-        elif [[ "${id:0:8}" == "youtube." ]]; then
-            # This can be a video ID, a channel ID, a channel name, or a playlist
-            if [[ "${id:12:1}" == "@" ]]; then
-                printOutput "4" "Found username"
-                # It's a username
-                ytId="${id:13}"
-                ytId="${ytId%\&*}"
-                ytId="${ytId%\?*}"
-                ytId="${ytId%\/*}"
-                # We have the "@username", we need the channel ID
-                # Try using yt-dlp as an API First
-                printOutput "3" "Calling yt-dlp to obtain channel ID from channel handle [@${ytId}]"
-                if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                    channelId="$(yt-dlp -J --playlist-items 0 --cookies "${cookieFile}" "https://www.youtube.com/@${ytId}")"
-                else
-                    channelId="$(yt-dlp -J --playlist-items 0 "https://www.youtube.com/@${ytId}")"
-                fi
-                #throttleDlp
-                
-                channelId="$(yq -p json ".channel_id" <<<"${channelId}")"
-                if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                    # We don't, let's try the official API
-                    printOutput "3" "Calling API to obtain channel ID from channel handle [@${ytId}]"
-                    ytApiCall "channels?forHandle=@${ytId}&part=snippet"
-                    apiResults="$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")"
-                    
-                    # Validate it
-                    if [[ -z "${apiResults}" ]]; then
-                        printOutput "1" "No data provided to validate interger"
-                        return 1
-                    elif [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-                        # Expected outcome
-                        true
-                    elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
-                        printOutput "1" "Data [${apiResults}] failed to validate as an interger"
-                        return 1
-                    else
-                        badExit "219" "Impossible condition"
-                    fi
-                    
-                    if [[ "${apiResults}" -eq "0" ]]; then
-                        printOutput "1" "API lookup for source parsing returned zero results"
-                        return 1
-                    fi
-                    if [[ "$(yq -p json ".pageInfo.totalResults" <<<"${curlOutput}")" -eq "1" ]]; then
-                        channelId="$(yq -p json ".items[0].id" <<<"${curlOutput}")"
-                        # Validate it
-                        if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                            ### SKIP CONDITION
-                            printOutput "1" "Unable to validate channel ID for [@${ytId}]"
-                            continue
-                        fi
-                    else
-                        printOutput "1" "Unable to isolate channel ID for [${sourceUrl}]"
-                        continue
-                    fi
-                fi
-                printAngryWarning
-                printOutput "1" "Channel usernames are less reliable than channel ID's, as usernames can be changed, but ID's can not."
-                printOutput "1" "Please consider replacing your source URL:"
-                printOutput "1" "  ${sourceUrl}"
-                printOutput "1" "with:"
-                printOutput "1" "  https://www.youtube.com/channel/${channelId}"
-                printOutput "2" " "
-                printOutput "3" "Found channel ID [${channelId}] for handle [@${ytId}]"
-                itemType="channel"
-            elif [[ "${id:12:8}" == "watch?v=" ]]; then
-                # It's a video ID
-                printOutput "4" "Found video ID"
-                itemType="video"
-                ytId="${id:20:11}"
-            elif [[ "${id:12:7}" == "channel" ]]; then
-                # It's a channel ID
-                printOutput "4" "Found channel ID"
-                itemType="channel"
-                channelId="${id:20:24}"
-            elif [[ "${id:12:8}" == "playlist" ]]; then
-                # It's a playlist
-                printOutput "4" "Found playlist"
-                itemType="playlist"
-                if [[ "${id:26:2}" == "WL" ]]; then
-                    # Watch later
-                    plId="${id:26:2}"
-                elif [[ "${id:26:2}" == "LL" ]]; then
-                    # Liked videos
-                    plId="${id:26:2}"
-                elif [[ "${id:26:2}" == "PL" ]]; then
-                    # Public playlist?
-                    plId="${id:26:34}"
-                fi
-            fi
-        else
-            printOutput "1" "Unable to parse input [${id}] -- skipping"
-            continue
-        fi
-
-        if [[ "${itemType}" == "video" ]]; then
-            # Add it to our array of videos to process
-            videoArr+=("${ytId}")
-            configLevel="1"
-        elif [[ "${itemType}" == "channel" ]]; then
-            # We should use ${channelId} for the channel ID rather than ${ytId} which could be the handle
-            # Get a list of the videos for the channel
-            printOutput "3" "Getting video list for channel ID [${channelId}]"
-            if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                while read -r i; do
-                    videoArr+=("${i}")
-                    backupVideoArr+=("${i}")
-                done < <(yt-dlp --flat-playlist --no-warnings --cookies "${cookieFile}" --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
-            else
-                while read -r i; do
-                    videoArr+=("${i}")
-                    backupVideoArr+=("${i}")
-                done < <(yt-dlp --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
-            fi
-            #throttleDlp
-            
-            printOutput "4" "Pulled list of [${#videoArr[@]}] videos from channel"
-
-            # Assign config levels
-            configLevel="3"
-
-            # Check to make sure we should continue to ignore any shorts for this channel
-            if ! [[ "${videoOutput,,}" == "none" ]]; then
-                if [[ "${vidIncludeShorts,,}" == "true" ]]; then
-                    dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND TYPE = 'short' AND VID_STATUS = 'skipped';")"
-                    if [[ "${dbReply}" -ne "0" ]]; then
-                        # We need to re-process the videos that matched
-                        printOutput "2" "Found [${dbReply}] previously indexed and skipped shorts to be processed"
-                        while read -r ytId; do
-                            printOutput "4" "Setting file ID [${ytId}] to status 'queued'"
-                            # Update its status to queued
-                            if ! sqDb "UPDATE source_videos SET VID_STATUS = 'queued', TYPE = 'short', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                                printOutput "1" "Update for file ID [${ytId}] failed -- Skipping"
-                                continue
-                            fi
-                        done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND TYPE = 'short' AND VID_STATUS = 'skipped';")
-                    fi
-                fi
-            fi
-            if ! [[ "${audioOutput,,}" == "none" ]]; then
-                if [[ "${audIncludeShorts,,}" == "true" ]]; then
-                    dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND TYPE = 'short' AND AUD_STATUS = 'skipped';")"
-                    if [[ "${dbReply}" -ne "0" ]]; then
-                        # We need to re-process the videos that matched
-                        printOutput "2" "Found [${dbReply}] previously indexed and skipped shorts to be processed"
-                        while read -r ytId; do
-                            printOutput "4" "Setting file ID [${ytId}] to status 'queued'"
-                            # Update its status to queued
-                            if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'queued', TYPE = 'short', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                                printOutput "1" "Update for file ID [${ytId}] failed -- Skipping"
-                                continue
-                            fi
-                        done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND TYPE = 'short' AND AUD_STATUS = 'skipped';")
-                    fi
-                fi
-            fi
-
-            # Find out what videos we have in our database for this channel ID
-            readarray -t dbVidArray < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}';")
-            printOutput "4" "Pulled list of [${#dbVidArray[@]}] videos from channel in database"
-
-            # Check to see if the results are identical
-            printOutput "4" "Comparing lists to check for any un-indexed content"
-            for z in "${!videoArr[@]}"; do
-                isMissing="1"
-                for zz in "${dbVidArray[@]}"; do
-                    if [[ "${videoArr[${z}]}" == "${zz}" ]]; then
-                        isMissing="0"
-                        continue
-                    fi
-                done
-                if [[ "${isMissing}" -eq "0" ]]; then
-                    unset videoArr["${z}"]
-                fi
-            done
-
-            # Check to see if there's no new videos. If so, we can skip further processing here.
-            if [[ "${#videoArr[@]}" -eq "0" ]]; then
-                printOutput "3" "No new content from source detected"
-                if [[ "${forceSourceUpdate}" -eq "1" ]]; then
-                    printOutput "3" "Forcing content update from source"
-                    for i in "${backupVideoArr[@]}"; do
-                        videoArr+=("${i}")
-                    done
-                else
-                    continue
-                fi
-            fi
-        elif [[ "${itemType}" == "playlist" ]]; then
-            printOutput "3" "Processing playlist ID [${plId}]"
-            # Is the playlist already in our database?
-            dbReply="$(sqDb "SELECT COUNT(1) FROM source_playlists WHERE ID = '${plId}';")"
-            if [[ "${dbReply}" -eq "0" ]]; then
-                # It is not, add it
-                newPlaylists+=("${plId}")
-                if ! getPlaylistInfo "${plId}"; then
-                    printOutput "1" "Failed to retrieve playlist info for [${plId}] -- Skipping source"
-                    continue
-                fi
-            elif [[ "${dbReply}" -ge "2" ]]; then
-                badExit "220" "Database query returned [${dbReply}] results -- Possible database corruption"
-            elif [[ "${dbReply}" -eq "1" ]]; then
-                # Get its visibility
-                plVis="$(sqDb "SELECT VISIBILITY FROM source_playlists WHERE ID = '${plId}';")"
-                # Get its title
-                plTitle="$(sqDb "SELECT TITLE FROM source_playlists WHERE ID = '${plId}';")"
-                
-                if [[ "${forceSourceUpdate}" -eq "1" ]]; then
-                    printOutput "3" "Forcing content update for playlist"
-                    newPlaylists+=("${plId}")
-                    if ! getPlaylistInfo "${plId}"; then
-                        printOutput "1" "Failed to retrieve playlist info for [${plId}] -- Skipping source"
-                        continue
-                    fi
-                fi
-            else
-                badExit "221" "Impossible condition"
-            fi
-
-            # Get a list of videos in the playlist -- Easier/faster to do this via yt-dlp than API
-            if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                while read -r i; do
-                    videoArr+=("${i}")
-                    backupVideoArr+=("${i}")
-                done < <(yt-dlp --cookies "${cookieFile}" --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
-            else
-                while read -r i; do
-                    videoArr+=("${i}")
-                    backupVideoArr+=("${i}")
-                done < <(yt-dlp --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
-            fi
-            #throttleDlp
-
-            # Assign config levels
-            configLevel="2"
-
-            # Find out what videos we have in our database for this channel ID
-            readarray -t dbVidArray < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}';")
-            
-            # Check to make sure all the videos in the database playlist order are (still) in the official order
-            resortPlaylist="0"
-            for z in "${dbVidArray[@]}"; do
-                inPlaylist="0"
-                for zz in "${videoArr[@]}"; do
-                    if [[ "${z}" == "${zz}" ]]; then
-                        inPlaylist="1"
-                        break
-                    fi
-                done
-                if [[ "${inPlaylist}" -eq "0" ]]; then
-                    printOutput "4" "File ID [${z}] appears to have been removed from playlist ID [${plId}]"
-                    # Mark this playlist ID as needing re-sorting
-                    resortPlaylist="1"
-                fi
-            done
-            
-            # If we removed anything from the playlist order database, we should re-sort its order
-            if [[ "${resortPlaylist}" -eq "1" ]]; then
-                unset dbVidArray
-                # Delete any rows where our playlist ID is the one we're currently working with
-                if ! sqDb "DELETE FROM playlist_order WHERE PLAYLIST_KEY = '${plId}';"; then
-                    printOutput "1" "Failed to remove stale playlist order keys for playlist ID [${plId}]"
-                fi
-            fi
-
-            # Clear out any previous playlist position arrays
-            unset plPosArr
-            # Check to see if the master playlist matches the local playlist
-            for z in "${!videoArr[@]}"; do
-                plPosArr["${z}"]="${videoArr[${z}]}"
-                
-                if [[ "${videoArr[${z}]}" == "${dbVidArray[${z}]}" ]]; then
-                    # It's in the correct position
-                    # Verify that the video is indexed
-                    # (Did a private one become visible?)
-                    dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE ID = '${videoArr[${z}]}';")"
-                    if [[ "${dbReply}" -eq "0" ]]; then
-                        # We need to index this video
-                        if ! compareFileIdToDb "${videoArr[${z}]}"; then
-                            printOutput "1" "Skipping ID [${videoArr[${z}]}]"
-                        fi
-                    elif [[ "${dbReply}" -eq "1" ]]; then
-                        unset videoArr["${z}"]
-                    elif [[ "${dbReply}" -ge "2" ]]; then
-                        badExit "222" "Database query returned [${dbReply}] results -- Possible database corruption"
-                    else
-                        badExit "223" "Impossible condition"
-                    fi
-                fi
-            done
-
-            # Add/compare it to the 'playlist_order' table
-            pos="1"
-            posChanged="0"
-            for ytId in "${plPosArr[@]}"; do
-                dbReply="$(sqDb "SELECT COUNT(1) FROM playlist_order WHERE ID = '${ytId}' AND PLAYLIST_KEY = '${plId}';")"
-                if [[ "${dbReply}" -eq "0" ]]; then
-                    # Doesn't exist, insert it
-                    # Get the ID number for sqlite, since we can't have multiple rows with a ytId as its unique ID in the DB
-                    idCountQueue="$(sqDb "SELECT SQID FROM playlist_order ORDER BY SQID DESC LIMIT 1;")"
-                    if [[ -z "${idCountQueue}" ]]; then
-                        idCountQueue="0"
-                    fi
-                    if [[ "${idCountQueue}" =~ ^[0-9]+$ ]]; then
-                        (( idCountQueue++ ))
-                    else
-                        badExit "224" "SQLite returned non-interger for ID count [${idCountQueue}]"
-                    fi
-                    if sqDb "INSERT INTO playlist_order (SQID, ID, PLAYLIST_INDEX, PLAYLIST_KEY, UPDATED) VALUES (${idCountQueue}, '${ytId}', ${pos}, '${plId}', $(date +%s));"; then
-                        printOutput "4" "Added file ID [${ytId}] to database to playlist [${plTitle}]"
-                    else
-                        badExit "225" "Adding file ID [${ytId}][Pos: ${pos}] to database under playlist ID [${plId}] failed"
-                    fi
-                    posChanged="1"
-                elif [[ "${dbReply}" -eq "1" ]]; then
-                    # Exists, what position is it.
-                    dbReply="$(sqDb "SELECT PLAYLIST_INDEX FROM playlist_order WHERE ID = '${ytId}' AND PLAYLIST_KEY = '${plId}';")"
-                    if ! [[ "${dbReply}" -eq "${pos}" ]]; then
-                        # Doesn't match our position, update it
-                        if sqDb "UPDATE playlist_order SET PLAYLIST_INDEX = ${pos}, PLAYLIST_KEY = '${plId}', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                            printOutput "3" "Updated file ID [${ytId}] to position [${pos}] in playlist [${plId}]"
-                        else
-                            badExit "226" "Updating file ID [${ytId}] to position [${pos}] in playlist [${plId}] failed"
-                        fi
-                        posChanged="1"
-                    fi
-                elif [[ "${dbReply}" -ge "2" ]]; then
-                    badExit "227" "Database query returned [${dbReply}] results -- Possible database corruption"
-                else
-                    badExit "228" "Impossible condition"
-                fi
-                (( pos++ ))
-            done
-            
-            # If we're being forced to update the source, process all the items in the playlist
-            if [[ "${forceSourceUpdate}" -eq "1" ]]; then
-                printOutput "3" "Forcing content update from source"
-                unset videoArr
-                for i in "${backupVideoArr[@]}"; do 
-                    videoArr+=("${i}")
-                done
-            elif [[ "${#videoArr[@]}" -eq "0" && "${posChanged}" -eq "0" ]]; then
-                printOutput "3" "No content changes detected in playlist, skipping further processing"
-                continue
-            fi
-
-            # If we've reached this far, we need to make a note that this playlist needs updating
-            updatedPlaylists+=("${plId}")
-        fi
-
-        # Iterate through our video list
-        printOutput "3" "Found [${#videoArr[@]}] video ID's to be processed into database"
+    # Make sure we actually have downloads to process
+    readarray -t downloadQueue < <(sqDb "SELECT ID FROM source_videos WHERE STATUS = 'queued';")
+    if [[ "${#downloadQueue[@]}" -ne "0" ]]; then
         n="1"
-        for ytId in "${videoArr[@]}"; do
-            printOutput "4" "Verifying file ID [${ytId}] against database [Item ${n} of ${#videoArr[@]}]"
-            if ! compareFileIdToDb "${ytId}"; then
-                printOutput "5" "Skipping ID [${ytId}]"
-            fi
-            (( n++ ))
-        done
-    done
-
-    # We're done with indexing our sources, now we need to process any queued videos
-    # Check for any previously failed downloands, and re-queue them
-    readarray -t failQueue < <(sqDb "SELECT DISTINCT ID FROM source_videos WHERE VID_STATUS = 'failed' OR AUD_STATUS = 'failed';")
-    if [[ "${#failQueue[@]}" -ge "1" ]]; then
-        printOutput "3" "Found [${#failQueue[@]}] previously failed items, marking for download to be re-attempted"
-        for ytId in "${failQueue[@]}"; do
-            vidFail="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${ytId}';")"
-            audFail="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${ytId}';")"
-            if [[ "${vidFail}" == "failed" ]]; then
-                if sqDb "UPDATE source_videos SET VID_STATUS = 'queued' WHERE ID = '${ytId}';"; then
-                    printOutput "5" "Requeueing failed video download for file ID [${ytId}] succeeded"
-                else
-                    printOutput "1" "Requeueing failed video download for file ID [${ytId}] failed"
-                fi
-            fi
-            if [[ "${audFail}" == "failed" ]]; then
-                if sqDb "UPDATE source_videos SET AUD_STATUS = 'queued' WHERE ID = '${ytId}';"; then
-                    printOutput "5" "Requeueing failed audio download for file ID [${ytId}] succeeded"
-                else
-                    printOutput "1" "Requeueing failed audio download for file ID [${ytId}] failed"
-                fi
-            fi
-        done
-    fi
-
-    # Start by checking to see if there are any videos in the queue
-    readarray -t vidQueue < <(sqDb "SELECT ID from source_videos WHERE VID_STATUS = 'queued' OR AUD_STATUS = 'queued';")
-    
-    if [[ "${#vidQueue[@]}" -ge "1" ]]; then
         printOutput "3" "############# Processing queued downloads #############"
-        # Let's get to work
-        itemCountVid="$(sqDb "SELECT COUNT(1) from source_videos WHERE (VID_STATUS = 'queued' AND AUD_STATUS != 'queued');")"
-        itemCountAud="$(sqDb "SELECT COUNT(1) from source_videos WHERE (VID_STATUS != 'queued' AND AUD_STATUS = 'queued');")"
-        itemCountBoth="$(sqDb "SELECT COUNT(1) from source_videos WHERE (VID_STATUS = 'queued' AND AUD_STATUS = 'queued');")"
-        # Get a list of items that are video only
-        itemCount="$(( itemCountVid + itemCountAud + itemCountBoth + itemCountBoth ))"
-        printOutput "3" "Processing ${itemCount} items in download queue [${itemCountVid} video][${itemCountAud} audio][${itemCountBoth} both raw][$(( itemCountBoth + itemCountBoth )) both corrected]"
-        n="1"
-        idCountQueue="1"
-        for ytId in "${vidQueue[@]}"; do
-            printOutput "4" "Processing file ID [${ytId}]"
+        for ytId in "${downloadQueue[@]}"; do
+            printOutput "4" "Downloading file ID [${ytId}] [Item ${n} of ${#downloadQueue[@]}]"
+            (( n++ ))
             
-            # Assign titles
-            assignTitle "${ytId}"
             # Clean out our tmp dir, as if we previously failed due to out of space, we don't want everything else after to fail
             rm -rf "${tmpDir:?}/"*
-
+            
             # Get the video title
-            vidTitle="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
+            vidTitle="$(sqDb "SELECT TITLE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
             if [[ -z "${vidTitle}" ]]; then
-                printOutput "1" "Video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+                badExit "106" "Retrieved blank title for file ID [${ytId}]"
             fi
-
-            # Get the cleaned video title
-            vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
+            
+            # Get the sanitized video title
+            vidTitleClean="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
             if [[ -z "${vidTitleClean}" ]]; then
-                printOutput "1" "Clean video title lookup for file ID [${ytId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+                badExit "107" "Retrieved blank clean title for file ID [${ytId}]"
             fi
-
-            # Get our channel ID
-            channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if ! [[ "${channelId}" =~ ^[0-9A-Za-z_-]{23}[AQgw]$ ]]; then
-                printOutput "1" "Channel ID lookup for file ID [${ytId}] returned invalid result [${channelId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+            
+            # Get the channel ID
+            channelId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
+            if [[ -z "${channelId}" ]]; then
+                badExit "108" "Retrieved blank channel ID for file ID [${ytId}]"
             fi
-
-            # Get our channel name
-            channelName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId}';")"
-            # Validate it
+            
+            # Get the channel name
+            channelName="$(sqDb "SELECT NAME FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+            # Make sure it's not blank
             if [[ -z "${channelName}" ]]; then
-                printOutput "1" "Channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+                badExit "109" "Retrieved blank channel name for channel ID [${channelId}]"
             fi
-
-            # Get our sanitized channel name
-            channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId}';")"
-            # Validate it
+            
+            # Get the clean channel name
+            channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+            # Make sure it's not blank
             if [[ -z "${channelNameClean}" ]]; then
-                printOutput "1" "Sanitized channel name lookup for channel ID [${channelId}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+                badExit "110" "Retrieved blank clean channel name for channel ID [${channelId}]"
             fi
-
-            # Get our channel output directory
-            chanDir="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId}';")"
-            # Validate it
-            if [[ -z "${chanDir}" ]]; then
-                badExit "229" "Unable to look up channel video directory for channel ID [${channelId}]"
+            
+            # Get the channel path
+            channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+            # Make sure it's not blank
+            if [[ -z "${channelPath}" ]]; then
+                badExit "111" "Retrieved blank channel path for channel ID [${channelId}]"
             fi
-
-            # Get our year
-            vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if ! [[ "${vidYear}" =~ ^[0-9][0-9][0-9][0-9]$ ]]; then
-                printOutput "1" "Year lookup for file ID [${ytId}] returned invalid result [${vidYear}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                (( n++ ))
-                (( idCountQueue++ ))
-                continue
+            
+            # Get the season year
+            vidYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
+            if [[ -z "${vidYear}" ]]; then
+                badExit "112" "Retrieved blank year for file ID [${ytId}]"
             fi
-
-            # Get our video output format
-            videoOutput="$(sqDb "SELECT VID_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
+            
+            # Get the episode index
+            vidIndex="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
+            if [[ -z "${vidIndex}" ]]; then
+                badExit "113" "Retrieved blank index for file ID [${ytId}]"
+            fi
+            
+            # Get the desired resolution
+            videoOutput="$(sqDb "SELECT FORMAT FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
             if [[ -z "${videoOutput}" ]]; then
-                badExit "230" "Unable to look up video output format for file ID [${ytId}]"
+                badExit "114" "Retrieved blank video format for file ID [${ytId}]"
             fi
-
-            # Get our audio output format
-            audioOutput="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if [[ -z "${audioOutput}" ]]; then
-                badExit "231" "Unable to look up audio output format for file ID [${ytId}]"
+            
+            # Get the sponsor block status
+            sponsorblockOpts="$(sqDb "SELECT SB_ENABLE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            # Make sure it's not blank
+            if [[ -z "${sponsorblockOpts}" ]]; then
+                badExit "115" "Retrieved blank sponsor block setting for file ID [${ytId}]"
             fi
-
-            # Get our watched setting
-            markWatched="$(sqDb "SELECT WATCHED FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if [[ -z "${markWatched}" ]]; then
-                badExit "232" "Unable to look up watch option for file ID [${ytId}]"
-            fi
-
-            # Get our video status
-            vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if [[ -z "${vidStatus}" ]]; then
-                badExit "233" "Unable to look up video status for file ID [${ytId}]"
-            fi
-
-            # Get our audio status
-            audStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${ytId}';")"
-            # Validate it
-            if [[ -z "${audStatus}" ]]; then
-                badExit "234" "Unable to look up audio status for file ID [${ytId}]"
-            fi
-
-            # Get the order of all items in that season
-            readarray -t seasonOrder < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} ORDER BY TIMESTAMP ASC;")
-
-            # Iterate through the season until our ID matches, so we know our position
-            vidIndex="1"
-            for z in "${seasonOrder[@]}"; do
-                if [[ "${z}" == "${ytId}" ]]; then
-                    break
+            
+            # Check if the base channel directory exists
+            if ! [[ -d "${outputDir}/${channelPath}" ]]; then
+                # Create it
+                if ! mkdir -p "${outputDir}/${channelPath}"; then
+                    badExit "116" "Unable to create directory [${outputDir}/${channelPath}]"
                 fi
-                (( vidIndex++ ))
-            done
-
-            # Log that position in the database
-            if ! sqDb "UPDATE source_videos SET EP_INDEX = '${vidIndex}', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                badExit "235" "Unable to update episode index to [S${vidYear}E${vidIndex}] for file ID [${ytId}]"
+                newVideoDir+=("${channelId}")
+                
+                # Create the series image
+                makeShowImage "${channelId}"
             fi
-
-            # Verify that everything in that season is in the correct order, if there is more than one entry for the EP_INDEX we just set
-            dbReply="$(sqDb "SELECT COUNT(1) FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} AND EP_INDEX = '${vidIndex}';")"
-            if [[ "${dbReply}" -ge "2" ]]; then
-                # Go ahead and anticipate that our new episode is unwatched (watchedArr will fix this if it's set in config)
-                reindexArr["_${ytId}"]="unwatched"
-                orderNum="1"
+            
+            # Check to see if the season folder exists
+            if ! [[ -d "${outputDir}/${channelPath}/Season ${vidYear}" ]]; then
+                # Create it
+                if ! mkdir -p "${outputDir}/${channelPath}/Season ${vidYear}"; then
+                    badExit "117" "Unable to create directory [${outputDir}/${channelPath}/Season ${vidYear}]"
+                fi
+                
+                # Create the season image
+                makeSeasonImage "${channelId}" "${vidYear}"
+            fi
+            
+            # Download the video
+            # Unset any old leftover options
+            unset dlpOpts dlpOutput dlpError
+            # Set our options
+            if ! [[ "${videoOutput}" == "original" ]]; then
+                dlpOpts+=("-S res:${videoOutput}")
+            fi
+            if ! [[ "${sponsorblockOpts}" == "mark" ]]; then
+                dlpOpts+=("--sponsorblock-mark all")
+            elif ! [[ "${sponsorblockOpts}" == "remove" ]]; then
+                dlpOpts+=("--sponsorblock-remove all")
+            fi
+            dlpOpts+=("--no-progress" "--retry-sleep 10" "--merge-output-format mp4" "--convert-thumbnails jpg" "--embed-subs" "--embed-metadata" "--embed-chapters" "--sleep-requests 1.25")
+            if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+                startTime="$(($(date +%s%N)/1000000))"
                 while read -r z; do
-                    # z is the ytId
-                    dbNum="$(sqDb "SELECT EP_INDEX FROM source_videos WHERE ID = '${z}';")"
-                    if [[ -z "${dbNum}" ]]; then
-                        dbNum="1"
+                    dlpOutput+=("${z}")
+                    if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
+                        dlpError="${z}"
                     fi
-                    if [[ "${dbNum}" -ne "${orderNum}" ]]; then
-                        # UPDATE IT
-                        printOutput "2" "Correcting ID [${z}] to position [S${vidYear}E$(printf '%03d' "${orderNum}")]"
-                        # Get the clean title of the file we need to move
-                        vidTitleCleanMove="$(sqDb "SELECT TITLE_CLEAN FROM source_videos WHERE ID = '${z}';")"
-                        # Validate it
-                        if [[ -z "${vidTitleCleanMove}" ]]; then
-                            printOutput "1" "Clean video title lookup for file ID [${z}] returned blank result -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                            (( n++ ))
-                            (( idCountQueue++ ))
-                            continue
-                        fi
-
-                        # We need the season's rating key
-                        seasonRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear};")"
-                        # Validate it
-                        if [[ -z "${seasonRatingKey}" ]]; then
-                            printOutput "1" "No data provided to validate interger"
-                            return 1
-                        elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                            # Expected outcome
-                            true
-                        elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-                            printOutput "1" "Data [${seasonRatingKey}] failed to validate as an interger"
-                            return 1
-                        else
-                            badExit "236" "Impossible condition"
-                        fi
-                        inArray="0"
-                        for zz in "${reindexSeason[@]}"; do
-                            if [[ "${zz}" == "${seasonRatingKey}" ]]; then
-                                inArray="1"
-                                break
-                            fi
-                        done
-                        if [[ "${inArray}" -eq "0" ]]; then
-                            reindexSeason+=("${seasonRatingKey}")
-                        fi
-                        # Get the watch status for the season
-                        callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-                        # For each rating key in this season
-                        while read -r zz; do
-                            # Media item rating key is zz
-                            # We only need to do this if we don't already have it (from an earlier move?)
-                            if [[ -z "${reindexArr["_${fId}"]}" ]]; then
-                                fId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-                                fId="${fId%\]\.*}"
-                                fId="${fId##*\[}"
-                                watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .\"+@viewOffset\"" <<<"${curlOutput}")"
-                                if [[ "${watchStatus}" =~ ^[0-9]+$ ]]; then
-                                    # It's in progress
-                                    reindexArr["_${fId}"]="${watchStatus}"
-                                else
-                                    # Not in progress, we need to check the view count
-                                    watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${zz}\" ) .\"+@viewCount\"" <<<"${curlOutput}")"
-                                    if [[ "${watchStatus}" == "null" ]]; then
-                                        # It's unwatched
-                                        reindexArr["_${fId}"]="unwatched"
-                                    else
-                                        # It's watched
-                                        reindexArr["_${fId}"]="watched"
-                                    fi
-                                fi
-                            fi
-                        done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-
-                        # Move it
-                        if ! mv "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${dbNum}") - ${vidTitleCleanMove} [${z}].mp4" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${orderNum}") - ${vidTitleCleanMove} [${z}].mp4"; then
-                            badExit "237" "Unable to re-index [${channelNameClean} - S${vidYear}E$(printf '%03d' "${dbNum}")] to [${channelNameClean} - S${vidYear}E$(printf '%03d' "${orderNum}")]"
-                        fi
-                        
-                        # Move the thumbnail
-                        if ! mv "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${dbNum}") - ${vidTitleCleanMove} [${z}].jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${orderNum}") - ${vidTitleCleanMove} [${z}].jpg"; then
-                            printOutput "1" "Unable to re-index thumbail for [${channelNameClean} - S${vidYear}E$(printf '%03d' "${dbNum}")] to [${channelNameClean} - S${vidYear}E$(printf '%03d' "${orderNum}")]"
-                        fi
-
-                        # Correct the database entry
-                        if ! sqDb "UPDATE source_videos SET EP_INDEX = '${orderNum}', UPDATED = '$(date +%s)' WHERE ID = '${z}';"; then
-                            badExit "238" "Unable to update episode index to [S${vidYear}E${orderNum}] for file ID [${z}]"
-                        fi
+                done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                                  # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                endTime="$(($(date +%s%N)/1000000))"
+            else
+                startTime="$(($(date +%s%N)/1000000))"
+                while read -r z; do
+                    dlpOutput+=("${z}")
+                    if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
+                        dlpError="${z}"
                     fi
-                    (( orderNum++ ))
-                done < <(sqDb "SELECT ID FROM source_videos WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear} ORDER BY TIMESTAMP ASC;")
+                done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                                  # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                endTime="$(($(date +%s%N)/1000000))"
             fi
 
-            if ! [[ "${videoOutput}" == "none" ]] && ! [[ "${vidStatus}" == "downloaded" ]] ; then
-                # Add the series folder, if required
-                if ! [[ -d "${videoOutputDir}/${chanDir}" ]]; then
-                    if ! mkdir -p "${videoOutputDir}/${chanDir}"; then
-                        badExit "239" "Unable to create channel folder [${videoOutputDir}/${chanDir}]"
-                    else
-                        flagNewVideoDir="1"
-                    fi
+            # Retry #1 if throttled
+            if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
+                printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 1]"
+                sleep 120
+                unset dlpOutput dlpError
+                if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
+                    startTime="$(($(date +%s%N)/1000000))"
+                    while read -r z; do
+                        dlpOutput+=("${z}")
+                        if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
+                            dlpError="${z}"
+                        fi
+                    done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                                      # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                    endTime="$(($(date +%s%N)/1000000))"
                 else
-                    flagNewVideoDir="0"
+                    while read -r z; do
+                    startTime="$(($(date +%s%N)/1000000))"
+                        dlpOutput+=("${z}")
+                        if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
+                            dlpError="${z}"
+                        fi
+                    done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                                      # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
+                    endTime="$(($(date +%s%N)/1000000))"
                 fi
-
-                # Check for channel image(s)
-                if ! [[ -e "${videoOutputDir}/${chanDir}/show.jpg" ]]; then
-                    makeShowImage "${chanDir}" "${channelId}"
-                fi
-
-                # Create a season thumbnail
-                makeSeasonImage "${chanDir}" "${vidYear}" "${channelId}"
-
-                # Get the video format
-                videoOutput="$(sqDb "SELECT VID_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
-                # This is already validated, so we just need to check and make sure it's not blank
-                if [[ -z "${videoOutput}" ]]; then
-                    printOutput "1" "Invalid video format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # Get the sponsorblock options
-                sponsorblockOpts="$(sqDb "SELECT SB_OPTIONS FROM source_videos WHERE ID = '${ytId}';")"
-                # This is already validated, so we just need to check and make sure it's not blank
-                if [[ -z "${sponsorblockOpts}" ]]; then
-                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # We've validated where we should download it to. So... download it
-                # Unset any old leftover options
-                unset dlpOpts dlpOutput dlpError
-                # Set our options
-                if ! [[ "${videoOutput}" == "original" ]]; then
-                    dlpOpts+=("-S res:${videoOutput}")
-                fi
-                if ! [[ "${sponsorblockOpts}" == "mark" ]]; then
-                    dlpOpts+=("--sponsorblock-mark all")
-                elif ! [[ "${sponsorblockOpts}" == "remove" ]]; then
-                    dlpOpts+=("--sponsorblock-remove all")
-                fi
-                dlpOpts+=("--no-progress" "--retry-sleep 10" "--merge-output-format mp4" "--write-thumbnail" "--convert-thumbnails jpg" "--embed-subs" "--embed-metadata" "--embed-chapters" "--sleep-requests 1.25")
+            fi
+            # Retry #2 if throttled
+            if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
+                printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 2]"
+                sleep 120
+                unset dlpOutput dlpError
                 if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
                     startTime="$(($(date +%s%N)/1000000))"
                     while read -r z; do
@@ -5838,1353 +4485,151 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                                       # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 fi
-
-                # Retry #1 if throttled
-                if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
-                    printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 1]"
-                    sleep 120
-                    unset dlpOutput dlpError
-                    if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    else
-                        while read -r z; do
-                        startTime="$(($(date +%s%N)/1000000))"
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    fi
+            fi
+            # Make sure the video downloaded
+            if ! [[ -e "${tmpDir}/${ytId}.mp4" ]]; then
+                printOutput "1" "Download of video file ID [${ytId}] failed"
+                if [[ -n "${dlpError}" ]]; then
+                    printOutput "1" "Found yt-dlp error message [${dlpError}]"
                 fi
-                # Retry #2 if throttled
-                if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
-                    printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 2]"
-                    sleep 120
-                    unset dlpOutput dlpError
-                    if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    else
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                          # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
+                printOutput "1" "=========== Begin yt-dlp log ==========="
+                for z in "${dlpOutput[@]}"; do
+                    printOutput "1" "${z}"
+                done
+                printOutput "1" "============ End yt-dlp log ============"
+                printOutput "1" "Skipping file ID [${ytId}]"
+                if ! sqDb "UPDATE source_videos SET STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                    badExit "118" "Unable to update status to [failed] for file ID [${ytId}]"
+                fi
+                if [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: Join this channel from your computer or Android app to get access to members-only content like this video." ]]; then
+                    # It's a members-only video. Mark it as 'skipped' rather than 'failed'.                        
+                    if ! sqDb "UPDATE source_videos SET TYPE = 'members_only', STATUS = 'skipped', ERROR = 'Video is members only', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                        badExit "119" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
                     fi
                 else
+                    # Failed for some other reason                       
+                    if ! sqDb "UPDATE source_videos SET STATUS = 'failed', ERROR = '${dlpOutput[*]//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                        badExit "120" "Unable to update status to [failed] for file ID [${ytId}]"
+                    fi
+                fi
+                # Throttle if it's not the last item
+                if [[ "${n}" -lt "${#downloadQueue[@]}" ]]; then
                     throttleDlp
                 fi
-                # Make sure the video downloaded
-                if ! [[ -e "${tmpDir}/${ytId}.mp4" ]]; then
-                    printOutput "1" "Download of video file ID [${ytId}] failed"
-                    if [[ -n "${dlpError}" ]]; then
-                        printOutput "1" "Found yt-dlp error message [${dlpError}]"
-                    fi
-                    printOutput "1" "=========== Begin yt-dlp log ==========="
-                    for z in "${dlpOutput[@]}"; do
-                        printOutput "1" "${z}"
-                    done
-                    printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    if ! sqDb "UPDATE source_videos SET VID_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "240" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                    
-                    if [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: Join this channel to get access to members-only content like this video, and other exclusive perks." ]]; then
-                        # It's a members-only video. Mark it as 'skipped' rather than 'failed'.                        
-                        if ! sqDb "UPDATE source_videos SET TYPE = 'members_only', VID_STATUS = 'skipped', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                            badExit "240" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
-                        fi
-                    fi
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                else
-                    printOutput "4" "Download complete [$(timeDiff "${startTime}" "${endTime}")]"
-                fi
-                # Make sure the thumbnail was written
-                if ! [[ -e "${tmpDir}/${ytId}.jpg" ]]; then
-                    printOutput "1" "Download of thumbnail for video file ID [${ytId}] failed"
-                    printOutput "1" "=========== Begin yt-dlp log ==========="
-                    for z in "${dlpOutput[@]}"; do
-                        printOutput "1" "${z}"
-                    done
-                    printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    if ! sqDb "UPDATE source_videos SET VID_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "241" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # Make sure we can move the video from tmp to destination
-                if ! mv "${tmpDir}/${ytId}.mp4" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
-                    printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/Season ${vidYear}] -- Skipping"
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                else
-                    # Make sure we can move the thumbnail from tmp to destination
-                    if ! mv "${tmpDir}/${ytId}.jpg" "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
-                        printOutput "1" "Failed to move thumbnail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/Season ${vidYear}] -- Skipping"
-                        (( n++ ))
-                        (( idCountQueue++ ))
-                        continue
-                    fi
-                fi
-
-                if [[ -e "${videoOutputDir}/${chanDir}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
-                    printOutput "3" "Downloaded video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    msgArr+=("Downloaded video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]")
-                    if [[ "${flagNewVideoDir}" -eq "1" ]]; then
-                        newVideoDir+=("${channelId}")
-                    fi
-                    (( videoCount++ ))
-                    if ! sqDb "UPDATE source_videos SET VID_STATUS = 'downloaded', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "242" "Unable to update status to [downloaded] for file ID [${ytId}]"
-                    fi
-                else
-                    printOutput "1" "Failed to download [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
-                    if ! sqDb "UPDATE source_videos SET VID_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "243" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                fi
-                (( n++ ))
-
-                # If we should mark a video as watched, add it to an array to deal with later
-                if [[ "${markWatched}" == "true" ]]; then
-                    watchedArr+=("${ytId}")
-                fi
-            fi
-
-            if ! [[ "${audioOutput}" == "none" ]] && ! [[ "${audStatus}" == "downloaded" ]] ; then
-                # Add the artist folder
-                if ! [[ -d "${audioOutputDir}/${chanDir}" ]]; then
-                    if ! mkdir -p "${audioOutputDir}/${chanDir}"; then
-                        badExit "244" "Unable to create artist folder [${audioOutputDir}/${chanDir}]"
-                    else
-                        flagNewAudioDir="1"
-                    fi
-                else
-                    flagNewAudioDir="0"
-                fi
-
-                # Add the album folder
-                if ! [[ -d "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]" ]]; then
-                    if ! mkdir -p "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]" ; then
-                        badExit "245" "Unable to create season folder [${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]]"
-                    fi
-                fi
-
-                # Get the audio format
-                audioOutput="$(sqDb "SELECT AUD_FORMAT FROM source_videos WHERE ID = '${ytId}';")"
-                # This is already validated, so we just need to check and make sure it's not blank
-                if [[ -z "${audioOutput}" ]]; then
-                    printOutput "1" "Invalid audio format returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # Get the sponsorblock options
-                sponsorblockOpts="$(sqDb "SELECT SB_OPTIONS FROM source_videos WHERE ID = '${ytId}';")"
-                # This is already validated, so we just need to check and make sure it's not blank
-                if [[ -z "${sponsorblockOpts}" ]]; then
-                    printOutput "1" "Invalid sponsorblock option returned for file ID [${ytId}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # We've validated where we should download it to. So... download it
-                # Unset any old leftover options
-                unset dlpOpts dlpOutput dlpError
-                # Set our options
-                dlpOpts+=("-x" "--audio-format ${audioOutput}")
-                dlpOpts+=("--no-progress" "--retry-sleep 10" "--write-thumbnail" "--convert-thumbnails jpg" "--embed-metadata" "--embed-chapters")
-                if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                    startTime="$(($(date +%s%N)/1000000))"
-                    while read -r z; do
-                        dlpOutput+=("${z}")
-                        if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                            dlpError="${z}"
-                        fi
-                    done < <(yt-dlp ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.${audioOutput}" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                    # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                else
-                    startTime="$(($(date +%s%N)/1000000))"
-                    while read -r z; do
-                        dlpOutput+=("${z}")
-                        if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                            dlpError="${z}"
-                        fi
-                    done < <(yt-dlp ${dlpOpts[*]} -o "${tmpDir}/${ytId}.${audioOutput}" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                    # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                fi
-
-                if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
-                    printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 1]"
-                    sleep 120
-                    unset dlpOpts dlpOutput dlpError
-                    # Set our options
-                    if ! [[ "${videoOutput}" == "original" ]]; then
-                        dlpOpts+=("-S res:${videoOutput}")
-                    fi
-                    if ! [[ "${sponsorblockOpts}" == "mark" ]]; then
-                        dlpOpts+=("--sponsorblock-mark all")
-                    elif ! [[ "${sponsorblockOpts}" == "remove" ]]; then
-                        dlpOpts+=("--sponsorblock-remove all")
-                    fi
-                    dlpOpts+=("--no-progress" "--retry-sleep 10" "--merge-output-format mp4" "--write-thumbnail" "--convert-thumbnails jpg" "--embed-subs" "--embed-metadata" "--embed-chapters")
-                    if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                        # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    else
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                        # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    fi
-                fi
-                if [[ "${dlpError}" == "ERROR: unable to download video data: HTTP Error 403: Forbidden" ]]; then
-                    printOutput "2" "IP throttling detected, taking a 2 minute break and then trying again [Retry 2]"
-                    sleep 120
-                    unset dlpOpts dlpOutput dlpError
-                    # Set our options
-                    if ! [[ "${videoOutput}" == "original" ]]; then
-                        dlpOpts+=("-S res:${videoOutput}")
-                    fi
-                    if ! [[ "${sponsorblockOpts}" == "mark" ]]; then
-                        dlpOpts+=("--sponsorblock-mark all")
-                    elif ! [[ "${sponsorblockOpts}" == "remove" ]]; then
-                        dlpOpts+=("--sponsorblock-remove all")
-                    fi
-                    dlpOpts+=("--no-progress" "--retry-sleep 10" "--merge-output-format mp4" "--write-thumbnail" "--convert-thumbnails jpg" "--embed-subs" "--embed-metadata" "--embed-chapters")
-                    if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                        # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    else
-                        startTime="$(($(date +%s%N)/1000000))"
-                        while read -r z; do
-                            dlpOutput+=("${z}")
-                            if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                                dlpError="${z}"
-                            fi
-                        done < <(yt-dlp ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
-                                        # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
-                        endTime="$(($(date +%s%N)/1000000))"
-                    fi
-                else
-                    throttleDlp
-                fi
-
-                # Make sure the audio downloaded
-                if ! [[ -e "${tmpDir}/${ytId}.${audioOutput}" ]]; then
-                    printOutput "1" "Download of audio file ID [${ytId}] failed"
-                    if [[ -n "${dlpError}" ]]; then
-                        printOutput "1" "Found yt-dlp error message [${dlpError}]"
-                    fi
-                    printOutput "1" "=========== Begin yt-dlp log ==========="
-                    for z in "${dlpOutput[@]}"; do
-                        printOutput "1" "${z}"
-                        if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
-                            dlpError="${z}"
-                        fi
-                    done
-                    printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "246" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                else
-                    printOutput "4" "Download complete [$(timeDiff "${startTime}" "${endTime}")]"
-                fi
-                # Make sure the thumbnail was written
-                if ! [[ -e "${tmpDir}/${ytId}.${audioOutput}.jpg" ]]; then
-                    printOutput "1" "Download of thumbnail for audio file ID [${ytId}] failed"
-                    printOutput "1" "=========== Begin yt-dlp log ==========="
-                    for z in "${dlpOutput[@]}"; do
-                        printOutput "1" "${z}"
-                    done
-                    printOutput "1" "============ End yt-dlp log ============"
-                    printOutput "1" "Skipping file ID [${ytId}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "247" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                    (( n++ ))
-                    (( idCountQueue++ ))
-                    continue
-                fi
-
-                # Make sure we can move the audio from tmp to destination
-                if ! mv "${tmpDir}/${ytId}.${audioOutput}" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}"; then
-                    printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    continue
-                else
-                    # Make sure we can move the thumbnail from tmp to destination
-                    if ! mv "${tmpDir}/${ytId}.${audioOutput}.jpg" "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/cover.jpg"; then
-                        printOutput "1" "Failed to move thumbail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${chanDir}/${vidTitleClean}] -- Skipping [Item ${n} of ${itemCount}][${idCountQueue}]"
-                        (( n++ ))
-                        (( idCountQueue++ ))
-                        continue
-                    fi
-                fi
-
-                if [[ -e "${audioOutputDir}/${chanDir}/${vidTitleClean} [${ytId}]/01 - ${vidTitleClean} [${ytId}].${audioOutput}" ]]; then
-                    printOutput "3" "Downloaded audio [${channelName} - ${vidTitle}] [Item ${n} of ${itemCount}][${idCountQueue}]"
-                    msgArr+=("Downloaded audio [${channelName} - ${vidTitle}]")
-                    if [[ "${flagNewAudioDir}" -eq "1" ]]; then
-                        newAudioDir+=("${channelId}")
-                    fi
-                    albumsToProcess+=("${ytId}")
-                    (( audioCount++ ))
-
-                    if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'downloaded', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "248" "Unable to update status to [downloaded] for file ID [${ytId}]"
-                    fi
-                else
-                    printOutput "1" "Failed to download audio [${channelName} - ${vidTitle}]"
-                    if ! sqDb "UPDATE source_videos SET AUD_STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId}';"; then
-                        badExit "249" "Unable to update status to [failed] for file ID [${ytId}]"
-                    fi
-                fi
-                (( n++ ))
-            fi
-            (( idCountQueue++ ))
-        done
-        if [[ -n "${videoCount}" && "${videoCount}" -gt "0" ]]; then
-            printOutput "4" "Downloaded [${videoCount}] video files"
-        fi
-        if [[ -n "${audioCount}" && "${audioCount}" -gt "0" ]]; then
-            printOutput "4" "Downloaded [${audioCount}] audio files"
-        fi
-    fi
-fi
-
-if [[ "$(( videoCount + audioCount ))" -ge "1" ]]; then
-    printOutput "3" "############ Beginning post-download tasks ############"
-fi
-
-# Scan library for changes
-if [[ "${videoCount}" -ne "0" ]]; then
-    # Scan the video library for changes
-    refreshLibrary "${videoLibraryId}"
-    # Rule of thumb: Wait 2 seconds per video, minimum of 30 seconds, maximum of 10 minutes
-    scanWait="$(( videoCount * 2 ))"
-    if [[ "${scanWait}" -lt "30" ]]; then
-        scanWait="30"
-    elif [[ "${scanWait}" -gt "600" ]]; then
-        scanWait="600"
-    fi
-    printOutput "4" "Waiting [${scanWait}] seconds for Plex Media Scanner to update video file library"
-    sleep "${scanWait}"
-fi
-if [[ "${audioCount}" -ne "0" ]]; then
-    # Scan the audio library for changes
-    refreshLibrary "${audioLibraryId}"
-    # Rule of thumb: Wait 2 seconds per audio, minimum of 30 seconds, maximum of 10 minutes
-    scanWait="$(( audioCount * 2 ))"
-    if [[ "${scanWait}" -lt "30" ]]; then
-        scanWait="30"
-    elif [[ "${scanWait}" -gt "600" ]]; then
-        scanWait="600"
-    fi
-    printOutput "2" "Waiting [${scanWait}] seconds for Plex Media Scanner to update audio file library"
-    sleep "${scanWait}"
-fi
-
-# Fix metadata for any newly created channels
-if [[ "$(( ${#newVideoDir[@]} + ${#newAudioDir[@]} + ${#albumsToProcess[@]} ))" -ge "1" ]]; then
-    printOutput "3" "############## Correcting media metadata ##############"
-fi
-# This is for video
-for i in "${newVideoDir[@]}"; do
-    # i is channel ID
-    updateShowRatingKey "${i}"
-    # Now the rating key is stored in the database, retrieve it
-    showRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_channel WHERE CHANNEL_ID = '${i}';")"
-    # Validate it
-    if [[ -z "${showRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve rating key for series [${i}] (Has Plex picked it up yet?)"
-        continue
-    elif [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${showRatingKey}] failed to validate as an interger"
-        continue
-    else
-        badExit "250" "Impossible condition"
-    fi
-
-    if ! setSeriesMetadata "${showRatingKey}"; then
-        printOutput "1" "Failed to update metadata for series rating key [${ratingKey}]"
-    fi
-done
-# This is for audio
-for i in "${newAudioDir[@]}"; do
-    updateAristRatingKey "${i}"
-    # Now the rating key is stored in the database, retrieve it
-    showRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${i}';")"
-    # Validate it
-    if [[ -z "${showRatingKey}" ]]; then
-        printOutput "1" "Unable to retrieve rating key for artist [${i}] (Has Plex picked it up yet?)"
-        continue
-    elif [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${showRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${showRatingKey}] failed to validate as an interger"
-        continue
-    else
-        badExit "251" "Impossible condition"
-    fi
-
-    if ! setArtistMetadata "${showRatingKey}"; then
-        printOutput "1" "Failed to update metadata for artist rating key [${ratingKey}]"
-    fi
-done
-
-# This will update metadata for any newly downloaded albums
-for i in "${albumsToProcess[@]}"; do
-    printOutput "4" "Updating audio metadata for file ID [${i}]"
-    # Goal - Get the rating key for the album -- ${albumRatingKey}
-
-    # First, get the rating key for the artist
-    # Maybe we already know it?
-    artistChanId="$(sqDb "SELECT CHANNEL_ID FROM source_videos WHERE ID = '${i}';")"
-    if [[ -z "${artistChanId}" ]]; then
-        badExit "252" "Unable to retrieve artist ID for file ID [${i}] -- Possible database corruption"
-    fi
-
-    # Now check and see if we have an artist rating key for this channel ID
-    artistRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${artistChanId}';")"
-    if [[ -z "${artistChanId}" ]]; then
-        # We don't know it. This technically shouldn't be possible, but in case we ever end up here, let's add a lookup for it.
-        updateAristRatingKey "${artistChanId}"
-
-        # Now look it up again.
-        artistRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_channel WHERE CHANNEL_ID = '${artistChanId}';")"
-        if [[ -z "${artistChanId}" ]]; then
-            # If we still can't find it, we should panic for some reason
-            printOutput "1" "Unable to determine artist ID for channel ID [${artistChanId}] -- This shouldn't be possible. Skipping file ID [${i}]"
-            continue
-        fi
-    fi
-    # Validate it
-    if [[ -z "${artistRatingKey}" ]]; then
-        printOutput "1" "No artist rating key returned for channel ID [${artistChanId}] -- Skipping"
-        continue
-    elif [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${artistRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Artist rating key returned non-interger [${artistRatingKey}] for channel ID [${artistChanId}] -- Skipping"
-        continue
-    else
-        badExit "253" "Impossible condition"
-    fi
-
-    # Then, get the rating key for the album and track
-    # Maybe we already know it?
-    albumRatingKey="$(sqDb "SELECT RATING_KEY FROM audio_rating_key_by_album WHERE ID = '${i}';")"
-    if [[ -z "${albumRatingKey}" ]]; then
-        # Get a list of the albums for that year, for that artist
-        callCurl "${plexAdd}/library/metadata/${artistRatingKey}/children?X-Plex-Token=${plexToken}"
-        albumYear="$(sqDb "SELECT YEAR FROM source_videos WHERE ID = '${i}';")"
-        # Validate it
-        if [[ -z "${albumYear}" ]]; then
-            printOutput "1" "No album rating key returned for file ID [${i}] -- Skipping"
-            continue
-        elif [[ "${albumYear}" =~ ^[0-9]+$ ]]; then
-            # Expected outcome
-            true
-        elif ! [[ "${albumYear}" =~ ^[0-9]+$ ]]; then
-            printOutput "1" "Album rating key returned non-interger [${albumYear}] for file ID [${i}] -- Skipping"
-            continue
-        else
-            badExit "254" "Impossible condition"
-        fi
-        
-        readarray -t artistAlbums < <(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@year\" == \"${albumYear}\" ) .\"+@ratingKey\"" <<<"${curlOutput}")
-
-        if [[ "${#artistAlbums[@]}" -eq "0" ]]; then
-            printOutput "1" "No matching albums in year [${albumYear}] found for artist rating key [${artistRatingKey}] with channel ID [${artistChanId}] (Has Plex not yet picked up the media file?) -- Skipping album metadata update"
-        else
-            # For each album we've found (We have each album's rating key in ${artistAlbums[@]})
-            # Check the album contents for the file ID that matches
-            for z in "${artistAlbums[@]}"; do
-                # Get the file ID for that album
-                callCurl "${plexAdd}/library/metadata/${z}/children?X-Plex-Token=${plexToken}"
-                readarray -t artistTracks < <(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | .Media.Part.\"+@file\"" <<<"${curlOutput}")
-                # We read this into an array in case we have multiple matches
-                if [[ "${#artistTracks[@]}" -ne "1" ]]; then
-                    printOutput "2" "Multiple tracks [${artistTracks[*]}] detected for album rating key [${z}], artist rating key [${artistRatingKey}], of file ID [${i}], channel ID [${artistChanId}]"
-                fi
-                for artistTrack in "${artistTracks[@]}"; do
-                    # Now extract the file ID
-                    trackId="${artistTrack%\].*}"
-                    trackId="${trackId##*\[}"
-                    # Now compare it to the file ID we're working with
-                    if [[ "${trackId}" == "${i}" ]]; then
-                        # We've found it! Extract the rating key.
-                        trackRatingKey="$(yq -p xml ".MediaContainer.Track | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")"
-                        # Store the info we've retrieved
-                        # We already know that we don't know the album rating key, nor the track rating key
-                        # We do know the artist rating key
-
-                        # Insert the album rating key
-                        if sqDb "INSERT INTO audio_rating_key_by_album (RATING_KEY, ID, UPDATED) VALUES (${z}, '${i}', $(date +%s));"; then
-                            printOutput "5" "Added album rating key [${z}] to database"
-                        else
-                            badExit "255" "Adding album rating key [${z}] to database failed"
-                        fi
-
-                        # Insert the track rating key
-                        if sqDb "INSERT INTO audio_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES (${trackRatingKey}, '${i}', $(date +%s));"; then
-                            printOutput "5" "Added track rating key [${trackRatingKey}] to database"
-                        else
-                            badExit "256" "Adding track rating key [${trackRatingKey}] to database failed"
-                        fi
-
-                        albumRatingKey="${z}"
-                        break
-                    fi
-                done
-            done
-        fi
-    fi
-    
-    if [[ "${albumRatingKey}" =~ ^[0-9]+$ ]]; then
-        if ! setAlbumMetadata "${albumRatingKey}"; then
-            printOutput "1" "Failed to update metadata for album rating key [${ratingKey}]"
-        fi
-    else
-        printOutput "1" "Unable to attempt to set metadata for file ID [${i}], found album rating key [${albumRatingKey}]"
-    fi
-done
-
-if [[ "${#reindexSeason[@]}" -ne "0" ]]; then
-    printOutput "3" "########## Correcting media item positioning ##########"
-fi
-for seasonId in "${reindexSeason[@]}"; do
-    printOutput "3" "Re-indexing rating keys for season ID [${seasonId}]"
-    # Let's update the list of rating keys as correlated to file ID's from Plex
-    callCurl "${plexAdd}/library/metadata/${seasonId}/children?X-Plex-Token=${plexToken}"
-    while read -r epId; do
-        # Media item rating key is epId
-        ytId="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${epId}\" ) .Media.Part.\"+@file\"" <<<"${curlOutput}")"
-        ytId="${ytId%\]\.*}"
-        ytId="${ytId##*\[}"
-        
-        # Safety check
-        if [[ -z "${ytId}" ]]; then
-            printOutput "1" "Unable to obtain file ID for season rating key [${seasonId}] episode rating key [${epId}]"
-            continue
-        fi
-        
-        # Get the rating key
-        getVideoFileRatingKey "${ytId}"
-        
-        # Get the pre-move watch status
-        callCurl "${plexAdd}/library/metadata/${videoFileRatingKey[_${ytId}]}?X-Plex-Token=${plexToken}"
-        watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@viewOffset\"" <<<"${curlOutput}")"
-        if [[ "${watchStatus}" =~ ^[0-9]+$ ]]; then
-            # It's partially watched
-            reindexArr["_${ytId}"]="${watchStatus}"
-        else
-            # It's watched or unwatched
-            # We need the viewCount
-            watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${ytId}]}\" ) .\"+@viewCount\"" <<<"${curlOutput}")"
-            if [[ "${watchStatus}" == "null" ]]; then
-                # It's unwatched
-                reindexArr["_${ytId}"]="unwatched"
+                continue
             else
-                # It's unwatched
-                reindexArr["_${ytId}"]="watched"
+                printOutput "4" "File downloaded [$(timeDiff "${startTime}" "${endTime}")]"
             fi
-        fi
-        
-        # Make sure we have zero or (preferrably) one entry in the video_rating_key_by_item table
-        dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE ID = '${ytId}';")"
-        if [[ "${dbCount}" -eq "0" ]]; then
-            # We need to insert, which we'll do below
-            true
-        elif [[ "${dbCount}" -eq "1" ]]; then
-            # We can't update the ID column (Rating key), and I didn't plan ahead to ID these columns by ${ytId}, so
-            # we'll take the lazy way out and delete the row, and then add the new one.
-            if sqDb "DELETE FROM video_rating_key_by_item WHERE ID = '${ytId}';"; then
-                printOutput "5" "Removed file ID [${ytId}] rating key [${epId}] from database"
-            else
-                badExit "257" "Failed to remove file ID [${ytId}] rating key [${epId}] from database"
-            fi
-        else
-            # We need to panic
-            badExit "258" "Received unexpected output [${dbCount}] when checking video_rating_key_by_item table -- Possible database corruption"
-        fi
-        
-        # Make sure we don't have the new rating key under and old file ID
-        dbCount="$(sqDb "SELECT COUNT(1) FROM video_rating_key_by_item WHERE RATING_KEY = ${epId};")"
-        if [[ "${dbCount}" -eq "0" ]]; then
-            # We're good
-            true
-        elif [[ "${dbCount}" -eq "1" ]]; then
-            # Get rid of the old one
-            if sqDb "DELETE FROM video_rating_key_by_item WHERE RATING_KEY = ${epId};"; then
-                printOutput "5" "Removed stale rating key [${epId}] from database"
-            else
-                badExit "259" "Failed to remove stale rating key [${epId}] from database"
-            fi
-        else
-            # We need to panic
-            badExit "260" "Received unexpected output [${dbCount}] when removing stale rating key [${epId}] from video_rating_key_by_item table -- Possible database corruption"
-        fi
-        
-        # Add the new data
-        videoFileRatingKey["_${ytId}"]="${epId}"
-        if sqDb "INSERT INTO video_rating_key_by_item (RATING_KEY, ID, UPDATED) VALUES (${epId}, '${ytId}', $(date +%s));"; then
-            printOutput "5" "Added file ID [${ytId}] with rating key to [${epId}] to database"
-        else
-            badExit "261" "Failed to update file ID [${ytId}] rating key to [${epId}]"
-        fi
-        
-    done < <(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
-done
-
-if [[ "$(( ${#watchedArr[@]} + ${#reindexArr[@]} ))" -ne "0" ]]; then
-    printOutput "3" "############ Correcting media watch status ############"
-fi
-for ytId in "${!reindexArr[@]}"; do
-    # Unpad the key
-    ytId="${ytId#_}"
-
-    # Assign titles
-    assignTitle "${ytId}"
-    
-    # Get the epId (rating key) for the file ID
-    getVideoFileRatingKey "${ytId}"
-    # Validate it
-    if [[ -z "${videoFileRatingKey[_${ytId}]}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        continue
-    elif [[ "${videoFileRatingKey[_${ytId}]}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${videoFileRatingKey[_${ytId}]}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${videoFileRatingKey[_${ytId}]}] failed to validate as an interger"
-        continue
-    else
-        badExit "262" "Impossible condition"
-    fi
-    # Get the channel ID for the file ID
-    channelId="$(sqDb "SELECT CHANNEL_ID from source_videos WHERE ID = '${ytId}';")"
-    if [[ -z "${channelId}" ]]; then
-        printOutput "1" "Unable to locate channel ID for file ID [${ytId}] -- Skipping"
-        continue
-    fi
-    # Get the video year for the file ID
-    vidYear="$(sqDb "SELECT YEAR from source_videos WHERE ID = '${ytId}';")"
-    # Validate it
-    if [[ -z "${vidYear}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        continue
-    elif [[ "${vidYear}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${vidYear}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${vidYear}] failed to validate as an interger"
-        continue
-    else
-        badExit "263" "Impossible condition"
-    fi
-    
-    # Get the current watch status for the episodes
-    # We need the season's rating key
-    seasonRatingKey="$(sqDb "SELECT RATING_KEY FROM video_rating_key_by_season WHERE CHANNEL_ID = '${channelId}' AND YEAR = ${vidYear};")"
-    # Validate it
-    if [[ -z "${seasonRatingKey}" ]]; then
-        printOutput "1" "No data provided to validate interger"
-        continue
-    elif [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-        # Expected outcome
-        true
-    elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
-        printOutput "1" "Data [${seasonRatingKey}] failed to validate as an interger"
-        continue
-    else
-        badExit "264" "Impossible condition"
-    fi
-    # Get the watch status for the season
-    callCurl "${plexAdd}/library/metadata/${seasonRatingKey}/children?X-Plex-Token=${plexToken}"
-    # For each rating key in this season
-    
-    watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${ytId}]}\" ) .\"+@viewOffset\"" <<<"${curlOutput}")"
-    if [[ "${watchStatus}" =~ ^[0-9]+$ ]]; then
-        # It's partially watched
-        watchStatus="${watchStatus}"
-    else
-        # It's watched or unwatched
-        # We need the viewCount
-        watchStatus="$(yq -p xml ".MediaContainer.Video | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${videoFileRatingKey[_${ytId}]}\" ) .\"+@viewCount\"" <<<"${curlOutput}")"
-        if [[ "${watchStatus}" == "null" ]]; then
-            # It's unwatched
-            watchStatus="unwatched"
-        else
-            # It's unwatched
-            watchStatus="watched"
-        fi
-    fi
-    
-    if ! [[ "${watchStatus}" == "${reindexArr[_${ytId}]}" ]]; then
-        # reindexArr[${ytId}] is the watch status/offset [interger of progress]
-        printOutput "3" "Correcting watch status for file ID [${ytId}]"
-        
-        if [[ "${reindexArr[_${ytId}]}" == "watched" ]]; then
-            # Issue the call to mark the item as watched
-            printOutput "4" "Marking file ID [${ytId}] as watched"
-            if callCurl "${plexAdd}/:/scrobble?identifier=com.plexapp.plugins.library&key=${videoFileRatingKey[_${ytId}]}&X-Plex-Token=${plexToken}"; then
-                printOutput "5" "Success"
-            else
-                printOutput "1" "Failed to mark file ID [${ytId}] as watched via rating key [${videoFileRatingKey[_${ytId}]}]"
-            fi
-        elif [[ "${reindexArr[_${ytId}]}" == "unwatched" ]]; then
-            # Issue the call to mark the item as unwatched
-            printOutput "4" "Marking file ID [${ytId}] as unwatched"
-            if callCurl "${plexAdd}/:/unscrobble?identifier=com.plexapp.plugins.library&key=${videoFileRatingKey[_${ytId}]}&X-Plex-Token=${plexToken}"; then
-                printOutput "5" "Success"
-            else
-                printOutput "1" "Failed to mark file ID [${ytId}] as unwatched via rating key [${videoFileRatingKey[_${ytId}]}]"
-            fi
-        elif [[ "${reindexArr[_${ytId}]}" =~ ^[0-9]+$ ]]; then
-            # Issue the call to mark the item as partially watched
-            printOutput "4" "Marking file ID [${ytId}] as partially watched watched [$(msToTime "${reindexArr[_${ytId}]}")]"
-            if callCurlPut "${plexAdd}/:/progress?key=${videoFileRatingKey[_${ytId}]}&identifier=com.plexapp.plugins.library&time=${reindexArr[_${ytId}]}&state=stopped&X-Plex-Token=${plexToken}"; then
-                printOutput "5" "Success"
-            else
-                printOutput "1" "Failed to mark file ID [${ytId}] as partially watched [${reindexArr[_${ytId}]}|$(msToTime "${reindexArr[_${ytId}]}")] via rating key [${videoFileRatingKey[_${ytId}]}]"
-            fi
-        else
-            badExit "265" "Unexpected watch status for [${ytId}]: ${reindexArr[_${ytId}]}"
-        fi
-    fi
-done
-
-# Next from any new media we've added
-for ytId in "${watchedArr[@]}"; do
-    # Assign titles
-    assignTitle "${ytId}"
-    
-    # ytId is the file ID
-    printOutput "3" "Marking file ID [${ytId}] as watched"
-    
-    # Get the epId for the file ID
-    getVideoFileRatingKey "${ytId}"
-    
-    # Issue the call to mark the item as watched
-    printOutput "4" "Marking file ID [${ytId}] as watched"
-    if callCurl "${plexAdd}/:/scrobble?identifier=com.plexapp.plugins.library&key=${videoFileRatingKey[_${ytId}]}&X-Plex-Token=${plexToken}"; then
-        printOutput "5" "Successfully marked file ID [${ytId}] as watched"
-    else
-        printOutput "1" "Failed to mark file ID [${ytId}] as watched via rating key [${videoFileRatingKey[_${ytId}]}]"
-    fi
-done
-
-if [[ "$(( ${#newPlaylists[@]} + ${#updatedPlaylists[@]} ))" -ge "1" ]]; then
-    printOutput "3" "######### Updating playlists and collections ##########"
-fi
-
-for plId in "${newPlaylists[@]}"; do
-    if plTitle="$(sqDb "SELECT TITLE FROM source_playlists WHERE ID = '${plId}';")"; then
-        # Expected outcome
-        true
-    else
-        badExit "266" "Unable to retrieve playlist title from ID [${plId}] -- Possible database corruption"
-    fi
-    if plVis="$(sqDb "SELECT VISIBILITY FROM source_playlists WHERE ID = '${plId}';")"; then
-        # Expected outcome
-        true
-    else
-        badExit "267" "Unable to retrieve playlist title from ID [${plId}] -- Possible database corruption"
-    fi
-    
-    if [[ "${plVis}" == "public" ]]; then
-        # Treat is as a collection.
-        
-        # Get an indexed list of files in the collection, in order
-        # We're going to start it from 1, because that makes debugging positioning easier on my brain
-        unset dbPlaylistVids plVidsVideo plVidsAudio
-        dbPlaylistVids[0]="null"
-        while read -r i; do
-            dbPlaylistVids+=("${i}")
-        done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-        unset dbPlaylistVids[0]
-        
-        # Assign titles
-        for ytId in "${dbPlaylistVids[@]}"; do
-            assignTitle "${ytId}"
-        done
-        
-        # Get an indexed list of files for a video collection
-        for i in "${dbPlaylistVids[@]}"; do
-            if vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                # Expected outcome
-                # If it's 'downloaded', then add it to our video playlist array
-                if [[ "${vidStatus}" == "downloaded" ]]; then
-                    plVidsVideo+=("${i}")
-                fi
-            else
-                badExit "268" "Unable to retrieve video status for file ID [${i}]"
-            fi
-            if audStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                # Expected outcome
-                # If it's 'downloaded', then add it to our audio playlist array
-                if [[ "${audStatus}" == "downloaded" ]]; then
-                    plVidsAudio+=("${i}")
-                fi
-            else
-                badExit "269" "Unable to retrieve video status for file ID [${i}]"
-            fi
-        done
-        
-        # If we have videos, create a video collection
-        if [[ "${#plVidsVideo[@]}" -ne "0" ]]; then
-            # Make sure it doesn't already exist
-            callCurl "${plexAdd}/library/sections/${videoLibraryId}/collections?X-Plex-Token=${plexToken}"
-            collectionRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@title\" == \"${plTitle}\" ) .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${collectionRatingKey}" ]]; then
-                printOutput "1" "Video collection [${plTitle}] appears to already exist under rating key [${collectionRatingKey}] -- Skipping creation"
-                # Verify that we have the correct rating key
-                if ! plRatingKey="$(sqDb "SELECT VID_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-                    badExit "270" "Unable to retrieve DB video rating key for playlist ID [${plId}]"
-                fi
-                if [[ -z "${plRatingKey}" || "${plRatingKey}" == "null" || ! "${plRatingKey}" == "${collectionRatingKey}" ]]; then
-                    if ! sqDb "UPDATE source_playlists SET VID_RATING_KEY = '${collectionRatingKey}' WHERE ID = '${plId}';"; then
-                        printOutput "1" "Failed to update video collection rating key for playlist ID [${plId}]"
-                    fi
-                fi
-            else
-                printOutput "3" "Creating video collection [${plTitle}]"
+            # Get the thumbnail
+            # Grab the latest thumbnail
+            callCurlDownload "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg" "${tmpDir}/${ytId}.jpg"
             
-                # Encode our collection title
-                collectionTitleEncoded="$(rawurlencode "${plTitle}")"
-                
-                # Get our first item's rating key to seed the collection
-                getVideoFileRatingKey "${plVidsVideo[0]}"
-                
-                # Create the collection
-                callCurlPost "${plexAdd}/library/collections?type=4&title=${collectionTitleEncoded}&smart=0&uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${videoFileRatingKey[_${plVidsVideo[0]}]}&sectionId=${videoLibraryId}&X-Plex-Token=${plexToken}"
-                
-                # Retrieve the rating key
-                collectionRatingKey="$(yq -p xml ".MediaContainer.Directory.\"+@ratingKey\"" <<<"${curlOutput}")"
-                # Verify it
-                if [[ -z "${collectionRatingKey}" ]]; then
-                    printOutput "1" "Received no output for video collection rating key for playlist ID [${plId}] on creation -- Skipping"
-                    continue
-                elif ! [[ "${collectionRatingKey}" =~ ^[0-9]+$ ]]; then
-                    printOutput "1" "Received non-interger [${collectionRatingKey}] for video collection rating key for playlist ID [${plId}] on creation -- Skipping"
-                else
-                    printOutput "4" "Created video collection [${plTitle}] successfully"
-                    printOutput "5" "Added [${plVidsVideo[0]}|${videoFileRatingKey[_${plVidsVideo[0]}]}] to video collection [${collectionRatingKey}]"
-                fi
-                # Store it
-                # We already know we exist in the database, so this is an update call
-                if sqDb "UPDATE source_playlists SET VID_RATING_KEY = ${collectionRatingKey} WHERE ID = '${plId}';"; then
-                    printOutput "5" "Updated playlist ID [${plId}] video rating key to [${collectionRatingKey}]"
-                else
-                    badExit "271" "Failed to update playlist ID [${plId}] video rating key to [${collectionRatingKey}] -- Possible database corruption"
-                fi
-                
-                # Set the order to 'Custom'
-                if callCurlPut "${plexAdd}/library/metadata/${collectionRatingKey}/prefs?collectionSort=2&X-Plex-Token=${plexToken}"; then
-                    printOutput "4" "Video collection [${collectionRatingKey}] order set to 'Custom'"
-                else
-                    printOutput "1" "Unable to change video collection [${collectionRatingKey}] order to 'Custom' -- Skipping"
+            if ! [[ -e "${tmpDir}/${ytId}.jpg" ]]; then
+                printOutput "1" "Download of thumbnail for video file ID [${ytId}] failed"
+            fi
+
+            # Make sure we can move the video from tmp to destination
+            if ! mv "${tmpDir}/${ytId}.mp4" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"; then
+                printOutput "1" "Failed to move file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${channelPath}/Season ${vidYear}] -- Skipping"
+                continue
+            else
+                # Make sure we can move the thumbnail from tmp to destination
+                if ! mv "${tmpDir}/${ytId}.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
+                    printOutput "1" "Failed to move thumbnail for file ID [${ytId}] from tmp dir [${tmpDir}] to destination [${channelPath}/Season ${vidYear}] -- Skipping"
                     continue
                 fi
-                
-                # Update the description
-                updateCollectionInfo "${plId}" "${collectionRatingKey}"
-                
-                # Add the rest of the videos
-                # Start from element 1, as we already added element 0
-                for i in "${plVidsVideo[@]:1}"; do
-                    getVideoFileRatingKey "${i}"
-                    if callCurlPut "${plexAdd}/library/collections/${collectionRatingKey}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${videoFileRatingKey[_${i}]}&X-Plex-Token=${plexToken}"; then
-                        printOutput "4" "Added [${i}|${videoFileRatingKey[_${i}]}] to video collection [${collectionRatingKey}]"
+            fi
+
+            if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
+                printOutput "3" "Successfully imported video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
+                msgArr+=("${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}")
+                if ! sqDb "UPDATE source_videos SET STATUS = 'downloaded', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                    badExit "121" "Unable to update status to [downloaded] for file ID [${ytId}]"
+                fi
+            else
+                printOutput "1" "Failed to download [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
+                if ! sqDb "UPDATE source_videos SET STATUS = 'failed', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
+                    badExit "122" "Unable to update status to [failed] for file ID [${ytId}]"
+                fi
+            fi
+
+            # If we should mark a video as watched, add it to an array to deal with later
+            if [[ "${markWatched}" == "true" ]]; then
+                if [[ -z "${watchedArr["_${ytId}"]}" ]]; then
+                    watchedArr["_${ytId}"]="watched"
+                else
+                    if [[ "${watchedArr["_${ytId}"]}" == "watched" ]]; then
+                        printOutput "5" "File ID [${ytId}] already marked as [watched]"
                     else
-                        printOutput "1" "Failed to add [${i}|${videoFileRatingKey[_${i}]}] to video collection [${collectionRatingKey}]"
-                    fi
-                done
-                
-                # Fix the order
-                collectionVerifySort "${collectionRatingKey}" "video"
-            fi
-        fi
-        
-        # If we have songs, create an audio collection
-        if [[ "${#plVidsAudio[@]}" -ne "0" ]]; then
-            # Make sure it doesn't already exist
-            callCurl "${plexAdd}/library/sections/${audioLibraryId}/collections?X-Plex-Token=${plexToken}"
-            collectionRatingKey="$(yq -p xml ".MediaContainer.Directory | ([] + .) | .[] | select ( .\"+@title\" == \"${plTitle}\" ) .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${collectionRatingKey}" ]]; then
-                printOutput "1" "Audio collection [${plTitle}] appears to already exist under rating key [${collectionRatingKey}] -- Skipping creation"
-                # Verify that we have the correct rating key
-                if ! plRatingKey="$(sqDb "SELECT AUD_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-                    badExit "272" "Unable to retrieve DB video rating key for playlist ID [${plId}]"
-                fi
-                if [[ -z "${plRatingKey}" || "${plRatingKey}" == "null" || ! "${plRatingKey}" == "${collectionRatingKey}" ]]; then
-                    if ! sqDb "UPDATE source_playlists SET AUD_RATING_KEY = '${collectionRatingKey}' WHERE ID = '${plId}';"; then
-                        printOutput "1" "Failed to update video collection rating key for playlist ID [${plId}]"
+                        printAngryWarning
+                        printOutput "2" "Attempted to overwrite file ID [${ytId}] watch status of [${watchedArr["_${ytId}"]}] with [watched]"
                     fi
                 fi
-            else
-                printOutput "3" "Creating audio collection [${plTitle}]"
-                
-                # Encode our collection title
-                collectionTitleEncoded="$(rawurlencode "${plTitle}")"
-                
-                # Get our first item's rating key to seed the collection
-                getAudioFileRatingKey "${plVidsAudio[0]}"
-                
-                # Create the collection
-                callCurlPost "${plexAdd}/library/collections?type=10&title=${collectionTitleEncoded}&smart=0&uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${audioFileRatingKey[_${plVidsAudio[0]}]}&sectionId=${audioLibraryId}&X-Plex-Token=${plexToken}"
-                
-                # Retrieve the rating key
-                collectionRatingKey="$(yq -p xml ".MediaContainer.Directory.\"+@ratingKey\"" <<<"${curlOutput}")"
-                # Verify it
-                if [[ -z "${collectionRatingKey}" ]]; then
-                    printOutput "1" "Received no output for audio collection rating key for playlist ID [${plId}] on creation -- Skipping"
-                    continue
-                elif ! [[ "${collectionRatingKey}" =~ ^[0-9]+$ ]]; then
-                    printOutput "1" "Received non-interger [${collectionRatingKey}] for audio collection rating key for playlist ID [${plId}] on creation -- Skipping"
-                else
-                    printOutput "4" "Created audio collection [${plTitle}] successfully"
-                    printOutput "5" "Added [${plVidsAudio[0]}|${audioFileRatingKey[_${plVidsAudio[0]}]}] to audio collection [${collectionRatingKey}]"
-                fi
-                # Store it
-                # We already know we exist in the database, so this is an update call
-                if sqDb "UPDATE source_playlists SET AUD_RATING_KEY = ${collectionRatingKey} WHERE ID = '${plId}';"; then
-                    printOutput "5" "Updated playlist ID [${plId}] audio rating key to [${collectionRatingKey}]"
-                else
-                    badExit "273" "Failed to update playlist ID [${plId}] audio rating key to [${collectionRatingKey}] -- Possible database corruption"
-                fi
-                
-                # Set the order to 'Custom'
-                if callCurlPut "${plexAdd}/library/metadata/${collectionRatingKey}/prefs?collectionSort=2&X-Plex-Token=${plexToken}"; then
-                    printOutput "4" "Audio collection [${collectionRatingKey}] order set to 'Custom'"
-                else
-                    printOutput "1" "Unable to change audio collection [${collectionRatingKey}] order to 'Custom' -- Skipping"
-                    continue
-                fi
-                
-                # Update the description
-                updateCollectionInfo "${plId}" "${collectionRatingKey}"
-                
-                # Add the rest of the videos
-                # Start from element 1, as we already added element 0
-                for i in "${plVidsAudio[@]:1}"; do
-                    getAudioFileRatingKey "${i}"
-                    if callCurlPut "${plexAdd}/library/collections/${collectionRatingKey}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${audioFileRatingKey[_${i}]}&X-Plex-Token=${plexToken}"; then
-                        printOutput "4" "Added [${i}|${audioFileRatingKey[_${i}]}] to audio collection [${collectionRatingKey}]"
-                    else
-                        printOutput "1" "Failed to add [${i}|${audioFileRatingKey[_${i}]}] to audio collection [${collectionRatingKey}]"
-                    fi
-                done
-                
-                # Fix the order
-                collectionVerifySort "${collectionRatingKey}" "audio"
             fi
-        fi
-        
-    elif [[ "${plVis}" == "private" ]]; then
-        # Treat it as a playlist
-        
-        # Get an indexed list of files in the playlist, in order
-        # We're going to start it from 1, because that makes debugging positioning easier on my brain
-        unset dbPlaylistVids plVidsVideo plVidsAudio
-        dbPlaylistVids[0]="null"
-        while read -r i; do
-            dbPlaylistVids+=("${i}")
-        done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-        unset dbPlaylistVids[0]
-        
-        # Assign titles
-        for ytId in "${dbPlaylistVids[@]}"; do
-            assignTitle "${ytId}"
-        done
-        
-        # Get an indexed list of files for a video playlist and an audio playlist
-        for i in "${dbPlaylistVids[@]}"; do
-            if vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                # Expected outcome
-                # If it's 'downloaded', then add it to our video playlist array
-                if [[ "${vidStatus}" == "downloaded" ]]; then
-                    plVidsVideo+=("${i}")
-                fi
-            else
-                badExit "274" "Unable to retrieve video status for file ID [${i}]"
-            fi
-            if audStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                # Expected outcome
-                # If it's 'downloaded', then add it to our audio playlist array
-                if [[ "${audStatus}" == "downloaded" ]]; then
-                    plVidsAudio+=("${i}")
-                fi
-            else
-                badExit "275" "Unable to retrieve video status for file ID [${i}]"
+            
+            # Throttle if it's not the last item
+            if [[ "${n}" -lt "${#downloadQueue[@]}" ]]; then
+                throttleDlp
             fi
         done
-           
-        # If we have videos, create a video playlist
-        if [[ "${#plVidsVideo[@]}" -ne "0" ]]; then
-            # Make sure it doesn't already exist
-            callCurl "${plexAdd}/playlists?X-Plex-Token=${plexToken}"
-            playlistRatingKey="$(yq -p xml ".MediaContainer.Playlist | ([] + .) | .[] | select ( .\"+@playlistType\" == \"video\" ) | select ( .\"+@title\" == \"${plTitle}\" ) .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${playlistRatingKey}" ]]; then
-                printOutput "1" "Video playlist [${plTitle}] appears to already exist under rating key [${playlistRatingKey}] -- Skipping creation"
-                # Verify that we have the correct rating key
-                if ! plRatingKey="$(sqDb "SELECT VID_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-                    badExit "276" "Unable to retrieve DB video rating key for playlist ID [${plId}]"
-                fi
-                if [[ -z "${plRatingKey}" || "${plRatingKey}" == "null" || ! "${plRatingKey}" == "${collectionRatingKey}" ]]; then
-                    if ! sqDb "UPDATE source_playlists SET VID_RATING_KEY = '${collectionRatingKey}' WHERE ID = '${plId}';"; then
-                        printOutput "1" "Failed to update video playlist rating key for playlist ID [${plId}]"
-                    fi
-                fi
-            else
-                printOutput "3" "Creating video playlist [${plTitle}]"
-            
-                # Encode our playlist title
-                playlistTitleEncoded="$(rawurlencode "${plTitle}")"
-                
-                # Get our first item's rating key to seed the playlist
-                getVideoFileRatingKey "${plVidsVideo[0]}"
-                
-                # Create the playlist
-                callCurlPost "${plexAdd}/playlists?type=video&title=${playlistTitleEncoded}&smart=0&uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${videoFileRatingKey[_${plVidsVideo[0]}]}&X-Plex-Token=${plexToken}"
-                
-                # Retrieve the rating key
-                playlistRatingKey="$(yq -p xml ".MediaContainer.Playlist.\"+@ratingKey\"" <<<"${curlOutput}")"
-                # Verify it
-                if [[ -z "${playlistRatingKey}" ]]; then
-                    printOutput "1" "Received no output for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
-                    continue
-                elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                    printOutput "1" "Received non-interger [${playlistRatingKey}] for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
-                else
-                    printOutput "3" "Created playlist [${plTitle}] successfully"
-                    printOutput "4" "Added file ID [${plVidsVideo[0]}] via rating key [${videoFileRatingKey[_${plVidsVideo[0]}]}] to playlist [${playlistRatingKey}] [${titleById[_${plVidsVideo[0]}]}]"
-                fi
-                
-                # Store it
-                # We already know we exist in the database, so this is an update call
-                if sqDb "UPDATE source_playlists SET VID_RATING_KEY = ${playlistRatingKey} WHERE ID = '${plId}';"; then
-                    printOutput "5" "Updated playlist ID [${plId}] rating key to [${playlistRatingKey}]"
-                else
-                    badExit "277" "Failed to update playlist ID [${plId}] rating key to [${playlistRatingKey}] -- Possible database corruption"
-                fi
-                
-                # Update the playlist info
-                updatePlaylistInfo "${plId}" "${playlistRatingKey}"
-                
-                # Add the rest of the videos
-                # Start from element 1, as we already added element 0
-                for i in "${plVidsVideo[@]:1}"; do
-                    getVideoFileRatingKey "${i}"
-                    if callCurlPut "${plexAdd}/playlists/${playlistRatingKey}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${videoFileRatingKey[_${i}]}&X-Plex-Token=${plexToken}"; then
-                        printOutput "4" "Added file ID [${i}] via rating key [${videoFileRatingKey[_${i}]}] to playlist [${playlistRatingKey}] [${titleById[_${i}]}]"
-                    else
-                        printOutput "1" "Failed to add [${i}|${videoFileRatingKey[_${i}]}] to playlist [${playlistRatingKey}]"
-                    fi
-                done
-                
-                # Fix the order
-                playlistVerifySort "${playlistRatingKey}" "video"
-            fi
-        fi
+    fi
+fi
+
+vidTotal="$(( ${#reindexArr[@]} + ${#importArr[@]} + ${#downloadQueue[@]} ))"
+if [[ "${vidTotal}" -ne "0" ]]; then
+    refreshSleep="$(( vidTotal * 3 ))"
+    if [[ "${refreshSleep}" -lt "30" ]]; then
+        refreshSleep="30"
+    elif [[ "${refreshSleep}" -gt "300" ]]; then
+        refreshSleep="300"
+    fi
+    refreshLibrary "${libraryId}"
+    printOutput "3" "Sleeping for [${refreshSleep}] seconds to give the Plex Scanner time to work"
+    sleep "${refreshSleep}"
+fi
+
+if [[ "${#newVideoDir[@]}" -ne "0" ]]; then
+    printOutput "3" "Found [${#newVideoDir[@]}] new series to set metadata for"
+    for channelId in "${newVideoDir[@]}"; do
+        printOutput "3" "Processing channel ID [${channelId}]"
         
-        if [[ "${#plVidsAudio[@]}" -ne "0" ]]; then
-            # Make sure it doesn't already exist
-            callCurl "${plexAdd}/playlists?X-Plex-Token=${plexToken}"
-            playlistRatingKey="$(yq -p xml ".MediaContainer.Playlist | ([] + .) | .[] | select ( .\"+@playlistType\" == \"audio\" ) | select ( .\"+@title\" == \"${plTitle}\" ) .\"+@ratingKey\"" <<<"${curlOutput}")"
-            if [[ -n "${playlistRatingKey}" ]]; then
-                printOutput "1" "Audio playlist [${plTitle}] appears to already exist under rating key [${playlistRatingKey}] -- Skipping creation"
-                # Verify that we have the correct rating key
-                if ! plRatingKey="$(sqDb "SELECT AUD_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-                    badExit "278" "Unable to retrieve DB video rating key for playlist ID [${plId}]"
-                fi
-                if [[ -z "${plRatingKey}" || "${plRatingKey}" == "null" || ! "${plRatingKey}" == "${collectionRatingKey}" ]]; then
-                    if ! sqDb "UPDATE source_playlists SET AUD_RATING_KEY = '${collectionRatingKey}' WHERE ID = '${plId}';"; then
-                        printOutput "1" "Failed to update video playlist rating key for playlist ID [${plId}]"
-                    fi
-                fi
-            else
-                printOutput "3" "Creating audio playlist [${plTitle}]"
-            
-                # Encode our playlist title
-                playlistTitleEncoded="$(rawurlencode "${plTitle}")"
-                
-                # Get our first item's rating key to seed the playlist
-                getAudioFileRatingKey "${plVidsAudio[0]}"
-                
-                # Create the playlist
-                callCurlPost "${plexAdd}/playlists?type=audio&title=${playlistTitleEncoded}&smart=0&uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${audioFileRatingKey[_${plVidsAudio[0]}]}&X-Plex-Token=${plexToken}"
-                
-                # Retrieve the rating key
-                playlistRatingKey="$(yq -p xml ".MediaContainer.Playlist.\"+@ratingKey\"" <<<"${curlOutput}")"
-                # Verify it
-                if [[ -z "${playlistRatingKey}" ]]; then
-                    printOutput "1" "Received no output for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
-                    continue
-                elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                    printOutput "1" "Received non-interger [${playlistRatingKey}] for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
-                else
-                    printOutput "3" "Created playlist [${plTitle}] successfully"
-                    printOutput "4" "Added file ID [${plVidsAudio[0]}] via rating key [${audioFileRatingKey[_${plVidsAudio[0]}]}] to playlist [${playlistRatingKey}] [${titleById[_${plVidsAudio[0]}]}]"
-                fi
-                
-                # Store it
-                # We already know we exist in the database, so this is an update call
-                if sqDb "UPDATE source_playlists SET AUD_RATING_KEY = ${playlistRatingKey} WHERE ID = '${plId}';"; then
-                    printOutput "5" "Updated playlist ID [${plId}] rating key to [${playlistRatingKey}]"
-                else
-                    badExit "279" "Failed to update playlist ID [${plId}] rating key to [${playlistRatingKey}] -- Possible database corruption"
-                fi
-                
-                # Update the playlist info
-                updatePlaylistInfo "${plId}" "${playlistRatingKey}"
-                
-                # Add the rest of the videos
-                # Start from element 1, as we already added element 0
-                for i in "${plVidsAudio[@]:1}"; do
-                    getAudioFileRatingKey "${i}"
-                    if callCurlPut "${plexAdd}/playlists/${playlistRatingKey}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${audioFileRatingKey[_${i}]}&X-Plex-Token=${plexToken}"; then
-                        printOutput "4" "Added file ID [${i}] via rating key [${audioFileRatingKey[_${i}]}] to playlist [${playlistRatingKey}] [${titleById[_${i}]}]"
-                    else
-                        printOutput "1" "Failed to add [${i}|${audioFileRatingKey[_${i}]}] to playlist [${playlistRatingKey}]"
-                    fi
-                done
-                
-                # Fix the order
-                playlistVerifySort "${playlistRatingKey}" "audio"
-            fi
-        fi
-    fi    
-done
+        # Search the PMS library for the rating key of the series
+        # This will also save the rating key to the database (Set series rating key)
+        setSeriesRatingKey "${channelId}"
+        # We now have ${showRatingKey} set
+        
+        # Update the series metadata
+        setSeriesMetadata "${showRatingKey}"
+    done
+fi
 
-for plId in "${updatedPlaylists[@]}"; do
-    printOutput "3" "Updating playlist ID [${plId}]"
-    if plTitle="$(sqDb "SELECT TITLE FROM source_playlists WHERE ID = '${plId}';")"; then
-        # Expected outcome
-        true
-    else
-        badExit "280" "Unable to retrieve playlist title from ID [${plId}] -- Possible database corruption"
-    fi
-    if plVis="$(sqDb "SELECT VISIBILITY FROM source_playlists WHERE ID = '${plId}';")"; then
-        # Expected outcome
-        true
-    else
-        badExit "281" "Unable to retrieve playlist title from ID [${plId}] -- Possible database corruption"
-    fi
-    
-    if [[ "${plVis}" == "public" ]]; then
-        # Treat is as a collection.
-        # Check for a video rating key
-        if playlistRatingKey="$(sqDb "SELECT VID_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-            # Command executed successfully, check to see if we got a value
-            if [[ -z "${playlistRatingKey}" ]]; then
-                printOutput "2" "No video collection rating key found, skipping video collection update"
-            elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Video collection rating key lookup for playlist ID [${plId}] returned non-interger [${playlistRatingKey}] -- Skipping"
-                continue
-            else
-                # Get an indexed list of files in the collection, in order starting from '1'
-                printOutput "5" "Obtaining order of items in collection from database"
-                unset dbPlaylistVids
-                dbPlaylistVids[0]="null"
-                while read -r i; do
-                    if vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                        if [[ "${vidStatus}" == "downloaded" ]]; then
-                            dbPlaylistVids+=("${i}")
-                        fi
-                    fi
-                done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-                unset dbPlaylistVids[0]
-                for arrIndex in "${!dbPlaylistVids[@]}"; do
-                    assignTitle "${ytId}"
-                    printOutput "5" "   dbCollectionOrder | ${arrIndex} => ${dbPlaylistVids[${arrIndex}]} [${titleById[_${dbPlaylistVids[${arrIndex}]}]}]"
-                done
-                # Add missing items
-                collectionVerifyAdd "${playlistRatingKey}" "video"
-                # Remove old items
-                collectionVerifyDelete "${playlistRatingKey}" "video"
-                # Correct the order
-                collectionVerifySort "${playlistRatingKey}" "video"
-            fi
+if [[ "${#watchedArr[@]}" -ne "0" ]]; then
+    for ytId in "${!watchedArr[@]}"; do
+        if ! setWatchStatus "${ytId#_}"; then
+            printOutput "1" "Failed to set watch status for file ID [${ytId#_}]"
         fi
-        if playlistRatingKey="$(sqDb "SELECT AUD_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-            # Command executed successfully, check to see if we got a value
-            if [[ -z "${playlistRatingKey}" ]]; then
-                printOutput "2" "No audio collection rating key found, skipping audio collection update"
-            elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Audio collection rating key lookup for playlist ID [${plId}] returned non-interger [${playlistRatingKey}] -- Skipping"
-                continue
-            else
-                # Get an indexed list of files in the collection, in order starting from '1'
-                printOutput "5" "Obtaining order of items in collection from database"
-                unset dbPlaylistVids
-                dbPlaylistVids[0]="null"
-                while read -r i; do
-                    if vidStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                        if [[ "${vidStatus}" == "downloaded" ]]; then
-                            dbPlaylistVids+=("${i}")
-                        fi
-                    fi
-                done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-                unset dbPlaylistVids[0]
-                for arrIndex in "${!dbPlaylistVids[@]}"; do
-                    assignTitle "${ytId}"
-                    printOutput "5" "   dbCollectionOrder | ${arrIndex} => ${dbPlaylistVids[${arrIndex}]} [${titleById[_${dbPlaylistVids[${arrIndex}]}]}]"
-                done
-                # Add missing items
-                collectionVerifyAdd "${playlistRatingKey}" "audio"
-                # Remove old items
-                collectionVerifyDelete "${playlistRatingKey}" "audio"
-                # Correct the order
-                collectionVerifySort "${playlistRatingKey}" "audio"
-            fi
-        fi
-    elif [[ "${plVis}" == "private" ]]; then
-        # Treat it as a playlist
-        # Check for a video rating key
-        if playlistRatingKey="$(sqDb "SELECT VID_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-            # Command executed successfully, check to see if we got a value
-            if [[ -z "${playlistRatingKey}" ]]; then
-                printOutput "2" "No video playlist rating key found, skipping video playlist update"
-            elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Video playlist rating key lookup for playlist ID [${plId}] returned non-interger [${playlistRatingKey}] -- Skipping"
-                continue
-            else
-                # Get an indexed list of files in the playlist, in order starting from '1'
-                printOutput "5" "Obtaining order of items in video playlist from database"
-                unset dbPlaylistVids
-                dbPlaylistVids[0]="null"
-                while read -r i; do
-                    if vidStatus="$(sqDb "SELECT VID_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                        if [[ "${vidStatus}" == "downloaded" ]]; then
-                            dbPlaylistVids+=("${i}")
-                        fi
-                    fi
-                done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-                unset dbPlaylistVids[0]
-                for arrIndex in "${!dbPlaylistVids[@]}"; do
-                    assignTitle "${ytId}"
-                    printOutput "5" "   dbCollectionOrder | ${arrIndex} => ${dbPlaylistVids[${arrIndex}]} [${titleById[_${dbPlaylistVids[${arrIndex}]}]}]"
-                done
-                # Add missing items
-                playlistVerifyAdd "${playlistRatingKey}" "video"
-                # Remove old items
-                playlistVerifyDelete "${playlistRatingKey}" "video"
-                # Correct the order
-                playlistVerifySort "${playlistRatingKey}" "video"
-            fi
-        fi
-        if playlistRatingKey="$(sqDb "SELECT AUD_RATING_KEY FROM source_playlists WHERE ID = '${plId}';")"; then
-            # Command executed successfully, check to see if we got a value
-            if [[ -z "${playlistRatingKey}" ]]; then
-                printOutput "2" "No audio playlist rating key found, skipping audio playlist update"
-            elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                printOutput "1" "Audio playlist rating key lookup for playlist ID [${plId}] returned non-interger [${playlistRatingKey}] -- Skipping"
-                continue
-            else
-                # Get an indexed list of files in the playlist, in order starting from '1'
-                printOutput "5" "Obtaining order of items in audio playlist from database"
-                unset dbPlaylistVids
-                dbPlaylistVids[0]="null"
-                while read -r i; do
-                    if vidStatus="$(sqDb "SELECT AUD_STATUS FROM source_videos WHERE ID = '${i}';")"; then
-                        if [[ "${vidStatus}" == "downloaded" ]]; then
-                            dbPlaylistVids+=("${i}")
-                        fi
-                    fi
-                done < <(sqDb "SELECT ID FROM playlist_order WHERE PLAYLIST_KEY = '${plId}' ORDER BY PLAYLIST_INDEX ASC;")
-                unset dbPlaylistVids[0]
-                for arrIndex in "${!dbPlaylistVids[@]}"; do
-                    assignTitle "${ytId}"
-                    printOutput "5" "   dbCollectionOrder | ${arrIndex} => ${dbPlaylistVids[${arrIndex}]} [${titleById[_${dbPlaylistVids[${arrIndex}]}]}]"
-                done
-                # Add missing items
-                playlistVerifyAdd "${playlistRatingKey}" "audio"
-                # Remove old items
-                playlistVerifyDelete "${playlistRatingKey}" "audio"
-                # Correct the order
-                playlistVerifySort "${playlistRatingKey}" "audio"
-            fi
-        fi
-    fi    
-done
+    done
+fi
 
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -ge "1" ]]; then
+if [[ "${#newPlaylists[@]}" -ne "0" ]]; then
+    printOutput "5" "TODO: Deal with new and updated playlists"
+fi
+
+# If we have any telegram messages, send them
+if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -gt "0" ]]; then
     printOutput "3" "############## Sending Telegram messages ##############"
     if [[ "${#msgArr[*]}" -gt "4000" ]]; then
         firstMsg="1"
         while read -r msg; do
             if [[ "${firstMsg}" -eq "1" ]]; then
-                sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}${msg}"
+                sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${lineBreak}${msg}"
                 firstMsg="0"
             else
                 sendTelegramMessage "${msg}"
             fi
-        done < <(fold -w 4000 <<<"${msgArr[*]}")
+        done < <(fold -w 4000 <<<"$(printf '%s\n' "${msgArr[@]}")") 
     else
-        sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}${msgArr[*]}"
+        sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
     fi
 fi
 
