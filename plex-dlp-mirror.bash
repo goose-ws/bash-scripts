@@ -59,9 +59,9 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
 fi
 
 # Dependency check
-depArr=("awk" "case" "chmod" "continue" "convert" "curl" "date" "declare" "do" "done" "echo" "elif" "exit" "for" "function" "grep" "identify" "if" "kill" "local" "md5sum" "printf" "readarray" "return" "rm" "select" "sleep" "source" "sqlite3" "then" "trap" "unset" "while" "yt-dlp" "yq")
+depsArr=("awk" "basename" "chmod" "cmp" "convert" "curl" "date" "docker" "find" "fold" "grep" "identify" "mkdir" "mktemp" "mv" "printf" "realpath" "shuf" "sqlite3" "yq" "yt-dlp")
 depFail="0"
-for i in "${depArr[@]}"; do
+for i in "${depsArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
         if ! [[ -e "${i}" ]]; then
             echo "Missing dependency [${i}]"
@@ -86,7 +86,7 @@ lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/ytdlp-plex-mirror.bash"
 # For ease of printing messages
-lineBreak="$(printf "\r\n\r\n")"
+lineBreak=$'\n\n'
 scriptStart="$(($(date +%s%N)/1000000))"
 
 #############################
@@ -94,7 +94,10 @@ scriptStart="$(($(date +%s%N)/1000000))"
 #############################
 if [[ -e "${lockFile}" ]]; then
     if kill -s 0 "$(<"${lockFile}")" > /dev/null 2>&1; then
-        echo "Lockfile present [PID $(<"${lockFile}")], refusing to run"
+        # We only need to print the lockfile warning if we're not being spawned by cron
+        if [[ -t 1 ]]; then
+            echo "Lockfile present [PID $(<"${lockFile}")], refusing to run"
+        fi
         exit 0
     else
         echo "Removing stale lockfile for PID $(<"${lockFile}")"
@@ -112,7 +115,7 @@ case "${1}" in
     2) logLevel="[warn] ";; # Warnings
     3) logLevel="[info] ";; # Informational
     4) logLevel="[verb] ";; # Verbose
-    5) logLevel="[DEBUG]";; # Debug
+    5) logLevel="[DEBUG]";; # Super Secret Debug Mode
 esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
@@ -345,6 +348,40 @@ else
 fi
 }
 
+function sendTelegramImage {
+# Message to send should be passed as function positional parameter #1
+# Image path should be passed as funcion positonal parameter #2
+callCurlGet "https://api.telegram.org/bot${telegramBotId}/getMe"
+if ! [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
+    printOutput "1" "Telegram bot API check failed"
+else
+    printOutput "4" "Telegram bot API key authenticated [$(yq -p json ".result.username" <<<"${curlOutput}")]"
+    for chanId in "${telegramChannelId[@]}"; do
+        callCurlGet "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}"
+        if [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
+            printOutput "4" "Telegram channel authenticated [$(yq -p json ".result.title" <<<"${curlOutput}")]"
+            callCurlPost "tgimage" "https://api.telegram.org/bot${telegramBotId}/sendPhoto" "${chanId}" "${1}" "${2}"
+            # Check to make sure Telegram returned a true value for ok
+            if ! [[ "$(yq -p json ".ok" <<<"${curlOutput}")" == "true" ]]; then
+                printOutput "1" "Failed to send Telegram message:"
+                printOutput "1" ""
+                while read -r i; do
+                    printOutput "1" "${i}"
+                done < <(yq -p json "." <<<"${curlOutput}")
+                printOutput "1" ""
+            else
+                printOutput "4" "Telegram message sent successfully"
+            fi
+        else
+            printOutput "1" "Telegram channel check failed"
+        fi
+        if [[ -n "${2}" ]]; then
+            break
+        fi
+    done
+fi
+}
+
 function apiCount {
 # Notify of how many API calls were made
 if [[ "${apiCallsYouTube}" -ne "0" ]]; then
@@ -430,8 +467,18 @@ if [[ -z "${1}" ]]; then
 fi
 # ${2} could be --data-binary and ${3} could be an image to be uploaded
 if [[ "${2}" == "--data-binary" ]]; then
+    printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\" --data-binary \"${3}\"]"
     curlOutput="$(curl -skL -X POST "${1}" --data-binary "${3}" 2>&1)"
+elif [[ "${1}" == "tgimage" ]]; then
+    # We're sending an image to telegram
+    # Positional parameter 2 is the URL
+    # Positional parameter 3 is the chat ID
+    # Positional parameter 4 is the caption
+    # Positional parameter 5 is the image
+    printOutput "5" "Issuing curl command [curl -skL -X POST \"${2}?chat_id=${3}&parse_mode=html&caption=$(rawUrlEncode "${4}")\" -F \"photo=@\"${5}\"\"]"
+    curlOutput="$(curl -skL -X POST "${2}?chat_id=${3}&parse_mode=html&caption=$(rawUrlEncode "${4}")" -F "photo=@\"${5}\"" 2>&1)"
 else
+    printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
     curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
 fi
 curlExitCode="${?}"
@@ -491,6 +538,7 @@ function callCurlDelete {
 if [[ -z "${1}" ]]; then
     badExit "9" "No input URL provided for DELETE"
 fi
+printOutput "5" "Issuing curl command [curl -skL -X DELETE \"${1}\"]"
 curlOutput="$(curl -skL -X DELETE "${1}" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -577,7 +625,6 @@ if [[ "${apiResults}" -eq "0" ]]; then
     if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
         printOutput "3" "Re-attempting video ID lookup via yt-dlp + cookie"
         dlpApiCall="$(yt-dlp --no-warnings -J --cookies "${cookieFile}" "https://www.youtube.com/watch?v=${1}" 2>/dev/null)"
-        #throttleDlp
         
         if [[ "$(yq -p json ".id" <<<"${dlpApiCall}")" == "${1}" ]]; then
             # Yes, it's a private video we can auth via cookie
@@ -603,6 +650,9 @@ if [[ "${apiResults}" -eq "0" ]]; then
             vidType="$(yq -p json ".live_status" <<<"${dlpApiCall}")"
             # We just need this to be a non-null value
             broadcastStart="dlp"
+            # TODO: Get the maxres thumbnail URL
+            thumbUrl="$(yq -p json ".thumbnail" <<<"${dlpApiCall}")"
+            thumbUrl="${thumbUrl%\?*}"
         else
             printOutput "1" "Unable to preform lookup on file ID [${1}] via yt-dlp -- Skipping"
             return 1
@@ -627,6 +677,8 @@ elif [[ "${apiResults}" -eq "1" ]]; then
     vidType="$(yq -p json ".items[0].snippet.liveBroadcastContent" <<<"${curlOutput}")"
     # Get the broadcast start time (Will only return value if it's a live broadcast)
     broadcastStart="$(yq -p json ".items[0].liveStreamingDetails.actualStartTime" <<<"${curlOutput}")"
+    # TODO: Get the maxres thumbnail URL
+    thumbUrl="$(yq -p json ".items[0].snippet.thumbnails | to_entries | .[-1].value.url" <<<"${curlOutput}")"
 else
     badExit "12" "Impossible condition"
 fi
@@ -655,8 +707,8 @@ while [[ "${vidTitleClean:$(( ${#vidTitleClean} - 1 )):1}" =~ ^( |\.)$ ]]; do
 done
 # Replace any forward or back slashes \ /
 vidTitleClean="${vidTitleClean//\//_}"
-vidTitleClean="${vidTitleClean//\\/_}"
 # Replace any colons :
+vidTitleClean="${vidTitleClean//\\/_}"
 vidTitleClean="${vidTitleClean//:/}"
 # Replace any stars *
 vidTitleClean="${vidTitleClean//\*/}"
@@ -771,8 +823,9 @@ elif [[ "${vidType}" == "none" || "${vidType}" == "not_live" || "${vidType}" == 
         printOutput "Broadcast start time lookup returned unexpected result [${broadcastStart}] -- Skipping"
         return 1
     fi
-elif [[ "${vidType}" == "live" || "${vidType}" == "is_live" ]]; then
+elif [[ "${vidType}" == "live" || "${vidType}" == "is_live" || "${vidType}" == "upcoming" ]]; then
     # Currently live
+    liveType="${vidType}"
     printOutput "2" "File ID [${1}] detected to be a live broadcast"
     vidType="live"
 else
@@ -799,7 +852,7 @@ if [[ "${dbCount}" -eq "0" ]]; then
         if [[ "${vidType}" == "live" ]]; then
             # Can't download a currently live video
             vidStatus="skipped"
-            vidError="Video is live at time of indexing"
+            vidError="Video has live status [${liveType}] at time of indexing"
         elif [[ "${vidType}" == "short" && "${includeShorts}" == "false" ]]; then
             # Shorts aren't allowed
             vidStatus="skipped"
@@ -844,7 +897,7 @@ chanDbCount="$(sqDb "SELECT COUNT(1) FROM source_channels WHERE ID = '${channelI
 if [[ "${chanDbCount}" -eq "0" ]]; then
     if ! channelToDb "${channelId}"; then
         printOutput "1" "Failed to add channel ID [${channelId}] to database -- Skipping"
-        continue
+        return 1
     fi
 elif [[ "${chanDbCount}" -eq "1" ]]; then
     # Safety check
@@ -893,6 +946,13 @@ if sqDb "UPDATE source_videos SET TIMESTAMP = ${uploadEpoch}, UPDATED = '$(date 
     printOutput "5" "Updated upload timestamp for file ID [${1}]"
 else
     printOutput "1" "Failed to update upload timestamp enable for file ID [${1}]"
+fi
+
+# Update the thumbnail URL
+if sqDb "UPDATE source_videos SET THUMBNAIL = '${thumbUrl//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    printOutput "5" "Updated thumbnail URL for file ID [${1}]"
+else
+    printOutput "1" "Failed to update thumbnail URL enable for file ID [${1}]"
 fi
 
 # Update the upload year
@@ -1801,7 +1861,6 @@ if [[ "${apiResults}" -eq "0" ]]; then
     if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
         printOutput "3" "Re-attempting playlist lookup via yt-dlp + cookie"
         dlpApiCall="$(yt-dlp --no-warnings -J --playlist-items 0 --cookies "${cookieFile}" "https://www.youtube.com/playlist?list=${1}" 2>/dev/null)"
-        #throttleDlp
         
         if [[ "$(yq -p json ".availability" <<<"${dlpApiCall}")" == "private" ]]; then
             # Yes, it's a private playlist we can auth via cookie
@@ -1849,7 +1908,7 @@ function playlistToDb {
 # Get the playlist info
 if ! getPlaylistInfo "${1}"; then
     printOutput "1" "Failed to retrieve playlist info for [${1}] -- Skipping source"
-    continue
+    return 1
 fi
 # Do we already know of this playlist?
 dbCount="$(sqDb "SELECT COUNT(1) FROM source_playlists WHERE ID = '${1//\'/\'\'}';")"
@@ -2424,10 +2483,10 @@ if [[ -z "${1}" ]]; then
     printOutput "1" "Pass file ID to getWatchStatus function"
     return 1
 fi
-# if [[ -n "${watchedArr[_${1}]}" ]]; then
-    # printOutput "5" "Watch status for file ID [${1}] already defined as [${watchedArr[_${1}]}]"
-    # return 0
-# fi
+if [[ -n "${watchedArr[_${1}]}" ]]; then
+    printOutput "5" "Watch status for file ID [${1}] already defined as [${watchedArr[_${1}]}]"
+    return 0
+fi
 if ! getFileRatingKey "${1}"; then
     printOutput "1" "Failed to retrieve rating key for file ID [${1}]"
 fi
@@ -2520,7 +2579,6 @@ while read -r ii; do
 done < <(yq -p xml ".MediaContainer.${fileStr} | ([] + .) | .[] | .Media.Part.\"+@file\"" <<<"${curlOutput}")
 unset plexCollectionOrder[0]
 for ii in "${!plexCollectionOrder[@]}"; do
-    assignTitle "${plexCollectionOrder[${ii}]}"
     printOutput "5" " plexCollectionOrder | ${ii} => ${plexCollectionOrder[${ii}]} [${titleById[_${plexCollectionOrder[${ii}]}]}]"
 done
 }
@@ -2542,8 +2600,6 @@ printOutput "3" "Checking for items to be re-ordered in ${2} collection"
 for ii in "${!plexCollectionOrder[@]}"; do
     # ii = position integer [starts from 1]
     # plexCollectionOrder[${ii}] = file ID
-    
-    assignTitle "${plexCollectionOrder[${ii}]}"
     
     if [[ "${ii}" -eq "1" ]]; then
         if ! [[ "${plexCollectionOrder[1]}" == "${dbPlaylistVids[1]}" ]]; then
@@ -2643,7 +2699,6 @@ for ii in "${dbPlaylistVids[@]}"; do
         else
             badExit "64" "Impossible condition"
         fi
-        assignTitle "${ii}"
         needNewOrder="1"
         callCurlPut "${plexAdd}/library/collections/${1}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${urlRatingKey}&X-Plex-Token=${plexToken}"
         printOutput "3" "Added file ID [${ii}][${titleById[_${ii}]}] to ${2} collection [${1}]"
@@ -2689,7 +2744,6 @@ for ii in "${plexCollectionOrder[@]}"; do
         else
             badExit "65" "Impossible condition"
         fi
-        assignTitle "${ii}"
         needNewOrder="1"
         callCurlDelete "${plexAdd}/library/collections/${1}/children/${urlRatingKey}?excludeAllLeaves=1&X-Plex-Token=${plexToken}"
         printOutput "3" "Removed file ID [${ii}] from ${2} collection [${1}] [${titleById[_${ii}]}]"
@@ -2762,7 +2816,6 @@ while read -r ii; do
 done < <(yq -p xml ".MediaContainer.${fileStr} | ([] + .) | .[] | .Media.Part.\"+@file\"" <<<"${curlOutput}")
 unset plexPlaylistOrder[0]
 for ii in "${!plexPlaylistOrder[@]}"; do
-    assignTitle "${plexPlaylistOrder[${ii}]}"
     printOutput "5" " plexPlaylistOrder | ${ii} => ${plexPlaylistOrder[${ii}]} [${titleById[_${plexPlaylistOrder[${ii}]}]}]"
 done
 }
@@ -2789,8 +2842,6 @@ printOutput "3" "Checking for items to be re-ordered in ${2} playlist [${1}]"
 for ii in "${!plexPlaylistOrder[@]}"; do
     # ii = position integer [starts from 1]
     # plexPlaylistOrder[${ii}] = file ID
-    
-    assignTitle "${plexPlaylistOrder[${ii}]}"
     
     needNewOrder="0"
     
@@ -2903,7 +2954,6 @@ for ii in "${dbPlaylistVids[@]}"; do
         else
             badExit "70" "Impossible condition"
         fi
-        assignTitle "${ii}"
         needNewOrder="1"
         callCurlPut "${plexAdd}/playlists/${1}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${urlRatingKey}&X-Plex-Token=${plexToken}"
         printOutput "3" "Added file ID [${ii}][${titleById[_${ii}]}] to ${2} playlist [${1}]"
@@ -2954,7 +3004,6 @@ for ii in "${plexPlaylistOrder[@]}"; do
         else
             badExit "71" "Impossible condition"
         fi
-        assignTitle "${ii}"
         needNewOrder="1"
         callCurlDelete "${plexAdd}/playlists/${1}/items/${playlistItemId}?X-Plex-Token=${plexToken}"
         printOutput "3" "Removed file ID [${ii}] from ${2} playlist [${1}] [${titleById[_${ii}]}]"
@@ -3010,7 +3059,6 @@ importMedia="0"
 verifyMedia="0"
 updateRatingKeys="0"
 updateMetadata="0"
-forceSourceUpdate="0"
 dbMaint="0"
 
 while [[ -n "${*}" ]]; do
@@ -3038,8 +3086,10 @@ while [[ -n "${*}" ]]; do
     "-m"|"--metadata-update")
         updateMetadata="1"
     ;;
-    "-f"|"--force-source-update")
-        forceSourceUpdate="1"
+    # TODO: Implement this
+    "-x"|"--ignore")
+        shift
+        ignoreId+=("${1}")
     ;;
     "-d"|"--db-maintenance")
         dbMaint="1"
@@ -3104,11 +3154,6 @@ scriptVer="${scriptVer#\# }"
 -m  --metadata-update       Updates descriptions and images for
                              all series, seasons, artists, albums,
                              playlists, and collections
-                             
--f  --force-source-update   Forces a source to be updated in the
-                             database, if it otherwise would have
-                             been skipped, e.g. if there was no
-                             new content
 
 -d  --db-maintenance        Preforms some database cleaning and
                              maintenance"
@@ -3290,20 +3335,16 @@ fi
 ##         Payload         ##
 #############################
 # If we're being invoked by cron, sleep for up to ${cronSleep}
-case "$-" in
-    *i*)
-        printOutput "5" "Script spawned by interactive terminal"
-        ;;
-    *)
-        printOutput "4" "Script spawned by cron with PID [${$}]"
-        if [[ "${cronSleep}" =~ ^[0-9]+$ ]]; then
-            sleepTime="$(( RANDOM % cronSleep ))"
-            printOutput "3" "Sleeping for [${sleepTime}] seconds before continuing"
-            sleep "${sleepTime}"
-        fi
-        ;;
-esac
-
+if [[ -t 1 ]]; then
+    printOutput "5" "Script spawned by interactive terminal"
+else    
+    printOutput "4" "Script spawned by cron with PID [${$}]"
+    if [[ "${cronSleep}" =~ ^[0-9]+$ ]]; then
+        sleepTime="$(( RANDOM % cronSleep ))"
+        printOutput "3" "Sleeping for [${sleepTime}] seconds before continuing"
+        sleep "${sleepTime}"
+    fi
+fi
 
 # Define some variables
 apiCallsYouTube="0"
@@ -3314,7 +3355,7 @@ declare -A reindexArr watchedArr verifiedArr
 # If no database exists, create one
 if ! [[ -e "${sqliteDb}" ]]; then
     printOutput "3" "############### Initializing database #################"
-    sqlite3 "${sqliteDb}" "CREATE TABLE source_videos(ID TEXT PRIMARY KEY, TITLE TEXT, TITLE_CLEAN TEXT, CHANNEL_ID TEXT, TIMESTAMP INTEGER, YEAR INTEGER, EP_INDEX INTEGER, DESC TEXT, TYPE TEXT, FORMAT TEXT, SHORTS TEXT, LIVE TEXT, WATCHED TEXT, STATUS TEXT, ERROR TEXT, SB_ENABLE TEXT, SB_REQUIRE TEXT, SB_AVAILABLE TEXT, UPDATED INTEGER);"
+    sqlite3 "${sqliteDb}" "CREATE TABLE source_videos(ID TEXT PRIMARY KEY, TITLE TEXT, TITLE_CLEAN TEXT, CHANNEL_ID TEXT, TIMESTAMP INTEGER, THUMBNAIL TEXT, YEAR INTEGER, EP_INDEX INTEGER, DESC TEXT, TYPE TEXT, FORMAT TEXT, SHORTS TEXT, LIVE TEXT, WATCHED TEXT, STATUS TEXT, ERROR TEXT, SB_ENABLE TEXT, SB_REQUIRE TEXT, SB_AVAILABLE TEXT, UPDATED INTEGER);"
     sqlite3 "${sqliteDb}" "CREATE TABLE source_channels(ID TEXT PRIMARY KEY, NAME TEXT, NAME_CLEAN TEXT, TIMESTAMP INTEGER, SUB_COUNT INTEGER, COUNTRY TEXT, URL TEXT, VID_COUNT INTEGER, VIEW_COUNT INTEGER, DESC TEXT, PATH TEXT, IMAGE TEXT, BANNER TEXT, UPDATED INTEGER);"
     sqlite3 "${sqliteDb}" "CREATE TABLE source_playlists(ID TEXT PRIMARY KEY, VISIBILITY TEXT, TITLE TEXT, DESC TEXT, IMAGE TEXT, UPDATED INTEGER);"
 
@@ -3502,7 +3543,7 @@ if [[ "${verifyMedia}" -eq "1" ]]; then
                 ytId="${ytId##* \[}"
                 #### Remove the file ID from the array
                 if [[ -n "${knownFiles[_${ytId}]}" ]]; then
-                    unset knownFiles[_${ytId}]
+                    unset knownFiles["_${ytId}"]
                     printOutput "5" "Verified [${knownFileId##*/}]"
                     (( verifySuccessCount++ ))
                 else
@@ -3575,9 +3616,9 @@ if [[ "${updateRatingKeys}" -eq "1" ]]; then
             else
                 #### Mismatch. Update.
                 if sqDb "UPDATE rating_key SET RATING_KEY = ${ratingKey}, UPDATED = '$(date +%s)' WHERE ID = '${firstFileChannelId//\'/\'\'}';"; then
-                    printOutput "5" "Updated stale rating key for series [${seriesTitle}] from [${foundRatingKey}] to [${ratingKey}]"
+                    printOutput "5" "Updated stale rating key for series [${seriesTitle}] from [${foundRatingKey[0]}] to [${ratingKey}]"
                 else
-                    printOutput "1" "Failed to update stale rating key for series [${seriesTitle}] from [${foundRatingKey}] to [${ratingKey}]"
+                    printOutput "1" "Failed to update stale rating key for series [${seriesTitle}] from [${foundRatingKey[0]}] to [${ratingKey}]"
                 fi
             fi
         else
@@ -3609,7 +3650,7 @@ if [[ "${updateMetadata}" -eq "1" ]]; then
     # Update all playlist information in database
     printOutput "3" "Processing playlists in database"
     while read -r plId; do
-        plName="$(sqDb "SELECT NAME FROM source_playlists WHERE ID = '${plId//\'/\'\'}';")"
+        plName="$(sqDb "SELECT TITLE FROM source_playlists WHERE ID = '${plId//\'/\'\'}';")"
         printOutput "4" "Updating database information for playlist ID [${plId}] [${plName}]"
         playlistToDb "${plId}"
     done < <(sqDb "SELECT ID FROM source_playlists;")
@@ -3643,30 +3684,37 @@ if [[ "${updateMetadata}" -eq "1" ]]; then
         channelPath="$(sqDb "SELECT PATH FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
         # Get our clean channel name
         channelNameClean="$(sqDb "SELECT NAME_CLEAN FROM source_channels WHERE ID = '${channelId//\'/\'\'}';")"
+        # Get our thumbnail URL
+        thumbUrl="$(sqDb "SELECT THUMBNAIL FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
         
-        # Grab the latest thumbnail
-        callCurlDownload "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"
-        
-        # Compare them
-        if cmp -s "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
-            printOutput "5" "No changes detected for file ID [${ytId}], removing newly downloaded file thumbnail"
-            if ! rm -f "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
-                printOutput "1" "Failed to remove newly downloaded file thumbmail for file ID [${ytId}]"
-            fi
+        # Grab the latest thumbnail, if the video type isn't private
+        vidVisibility="$(sqDb "SELECT TYPE FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+        if [[ "${vidVisibility}" =~ ^.*_private$ ]]; then
+            printOutput "2" "Unable to update thumbnail for file ID [${1}] due to no longer being public"
         else
-            printOutput "4" "New file thumbnail detected for file ID [${ytId}], backing up old image and replacing with new one"
-            if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/.${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].bak-$(date +%s).jpg"; then
-                printOutput "1" "Failed to back up previously downloaded file thumbnail for file ID [${ytId}]"
-            fi
-            if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
-                printOutput "1" "Failed to move newly downloaded show image file for channel ID [${1}]"
-            else
-                printOutput "3" "Updated thumbnail for file ID [${ytId}]"
-            fi
-        fi
+            callCurlDownload "${thumbUrl}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"
         
-        if ! [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
-            printOutput "1" "Failed to get thumbnail for file ID [${tmpId}]"
+            # Compare them
+            if cmp -s "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
+                printOutput "5" "No changes detected for file ID [${ytId}], removing newly downloaded file thumbnail"
+                if ! rm -f "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg"; then
+                    printOutput "1" "Failed to remove newly downloaded file thumbmail for file ID [${ytId}]"
+                fi
+            else
+                printOutput "4" "New file thumbnail detected for file ID [${ytId}], backing up old image and replacing with new one"
+                if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" "${outputDir}/${channelPath}/Season ${vidYear}/.${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].bak-$(date +%s).jpg"; then
+                    printOutput "1" "Failed to back up previously downloaded file thumbnail for file ID [${ytId}]"
+                fi
+                if ! mv "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].new.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"; then
+                    printOutput "1" "Failed to move newly downloaded show image file for channel ID [${1}]"
+                else
+                    printOutput "3" "Updated thumbnail for file ID [${ytId}]"
+                fi
+            fi
+            
+            if ! [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
+                printOutput "1" "Failed to get thumbnail for file ID [${tmpId}]"
+            fi
         fi
     done < <(sqDb "SELECT ID FROM source_videos;")
     
@@ -3903,7 +3951,7 @@ while read -r source; do
             printAngryWarning
             printOutput "1" "Refusing to index source with a non-constant URL"
             printOutput "1" "Channel usernames are less reliable than channel ID's, as usernames can be changed, but ID's can not."
-            printOutput "1" "To have this source indexed, please replacing your source URL:"
+            printOutput "1" "To have this source indexed, please replace your source URL:"
             printOutput "1" "  ${sourceUrl}"
             printOutput "1" "with its channel ID URL:"
             printOutput "1" "  https://www.youtube.com/channel/${channelId}"
@@ -4059,6 +4107,7 @@ while read -r source; do
                 # Make a note that we need to update this playlist in Plex
                 updatedPlaylists+=("${plId}")
                 # Dump the DB playlist info and re-add it.
+                ### TODO: We don't need to dump/re-add if the count is correct up to the number that exists in the database
                 printOutput "5" "Playlist item count [${#plVidList[@]}] does not match database item count [${#dbVidList[@]}]"
                 if sqDb "DELETE FROM playlist_order WHERE PLAYLIST_KEY = '${plId//\'/\'\'}';"; then
                     printOutput "5" "Removed playlist order due to item count mismatch for playlist ID [${plId}] from database"
@@ -4156,6 +4205,10 @@ while read -r source; do
             printOutput "4" "Adding file ID [${ytId}] to database [Item ${n} of ${#videoArr[@]}]"
             if ! ytIdToDb "${ytId}"; then
                 printOutput "1" "Failed to add file ID [${ytId}] from source [${source##*/}] to database"
+            fi
+            if [[ "${markWatched}" == "true" && -z "${watchedArr[_${ytId}]}" ]]; then
+                printOutput "5" "Noting file ID [${ytId}] to be marked as 'Watched'"
+                wachtedArr["_${ytId}"]="watched"
             fi
             (( n++ ))
         done
@@ -4277,7 +4330,8 @@ if [[ "${#importArr[@]}" -ne "0" ]]; then
         if ! [[ -e "${moveFrom%mp4}jpg" ]]; then
             # Still don't have one, so get it from web
             printOutput "5" "Pulling thumbail from web"
-            callCurlDownload "https://img.youtube.com/vi/${ytId}/maxresdefault.jpg" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
+            thumbUrl="$(sqDb "SELECT THUMBNAIL FROM source_videos WHERE ID = '${ytId//\'/\'\'}';")"
+            callCurlDownload "${thumbUrl}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
             if ! [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
                 printOutput "1" "Failed to get thumbnail for file ID [${ytId}]"
             fi
@@ -4296,6 +4350,8 @@ if [[ "${#importArr[@]}" -ne "0" ]]; then
         fi
     done
 fi
+
+# TODO: If we have previously skipped videos, see if we should unskip them
 
 if [[ "${skipDownload}" -eq "0" ]]; then
     # Make sure we actually have downloads to process
@@ -4423,7 +4479,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                     if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                         dlpError="${z}"
                     fi
-                done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                   # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                 endTime="$(($(date +%s%N)/1000000))"
             else
@@ -4433,7 +4489,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                     if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                         dlpError="${z}"
                     fi
-                done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                done < <(yt-dlp -vU ${dlpOpts[*]} --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                   # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                 endTime="$(($(date +%s%N)/1000000))"
             fi
@@ -4450,7 +4506,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                             dlpError="${z}"
                         fi
-                    done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                    done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                       # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 else
@@ -4460,7 +4516,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                             dlpError="${z}"
                         fi
-                    done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                    done < <(yt-dlp -vU ${dlpOpts[*]} --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                       # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 fi
@@ -4477,7 +4533,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                             dlpError="${z}"
                         fi
-                    done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                    done < <(yt-dlp -vU ${dlpOpts[*]} --cookies "${cookieFile}" --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                       # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 else
@@ -4487,7 +4543,7 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         if [[ "${z}" =~ ^"ERROR: ".*$ ]]; then
                             dlpError="${z}"
                         fi
-                    done < <(yt-dlp -vU ${dlpOpts[*]} -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
+                    done < <(yt-dlp -vU ${dlpOpts[*]} --sleep-requests 1.25 -o "${tmpDir}/${ytId}.mp4" "https://www.youtube.com/watch?v=${ytId}" 2>&1)
                                       # ^^^^^^^^^^^^^-Must be unquoted, or it'll break yt-dlp
                     endTime="$(($(date +%s%N)/1000000))"
                 fi
@@ -4548,7 +4604,6 @@ if [[ "${skipDownload}" -eq "0" ]]; then
 
             if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
                 printOutput "3" "Successfully imported video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
-                msgArr+=("${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}")
                 if ! sqDb "UPDATE source_videos SET STATUS = 'downloaded', UPDATED = '$(date +%s)' WHERE ID = '${ytId//\'/\'\'}';"; then
                     badExit "121" "Unable to update status to [downloaded] for file ID [${ytId}]"
                 fi
@@ -4570,6 +4625,18 @@ if [[ "${skipDownload}" -eq "0" ]]; then
                         printAngryWarning
                         printOutput "2" "Attempted to overwrite file ID [${ytId}] watch status of [${watchedArr["_${ytId}"]}] with [watched]"
                     fi
+                fi
+            fi
+            
+            # Send a telegram message, if allowed
+            if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" ]]; then
+                printOutput "4" "Sending Telegram message"
+                if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
+                    printOutput "5" "Sending Telegram image message"
+                    sendTelegramImage "<b>YouTube Video Downloaded</b>${lineBreak}${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
+                else
+                    printOutput "5" "Sending Telegram text message"
+                    sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}"
                 fi
             fi
             
@@ -4595,6 +4662,7 @@ if [[ "${vidTotal}" -ne "0" ]]; then
 fi
 
 if [[ "${#newVideoDir[@]}" -ne "0" ]]; then
+    printOutput "3" "############ Initializing channel metadata ############"
     printOutput "3" "Found [${#newVideoDir[@]}] new series to set metadata for"
     for channelId in "${newVideoDir[@]}"; do
         printOutput "3" "Processing channel ID [${channelId}]"
@@ -4610,7 +4678,9 @@ if [[ "${#newVideoDir[@]}" -ne "0" ]]; then
 fi
 
 if [[ "${#watchedArr[@]}" -ne "0" ]]; then
+    printOutput "3" "############### Correting watch status ################"
     for ytId in "${!watchedArr[@]}"; do
+        printOutput "4" "Setting watched status [${watchedArr[${ytId}]}] for file ID [${ytId#_}]"
         if ! setWatchStatus "${ytId#_}"; then
             printOutput "1" "Failed to set watch status for file ID [${ytId#_}]"
         fi
@@ -4619,24 +4689,6 @@ fi
 
 if [[ "${#newPlaylists[@]}" -ne "0" ]]; then
     printOutput "5" "TODO: Deal with new and updated playlists"
-fi
-
-# If we have any telegram messages, send them
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId}" && "${#msgArr[@]}" -gt "0" ]]; then
-    printOutput "3" "############## Sending Telegram messages ##############"
-    if [[ "${#msgArr[*]}" -gt "4000" ]]; then
-        firstMsg="1"
-        while read -r msg; do
-            if [[ "${firstMsg}" -eq "1" ]]; then
-                sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${lineBreak}${msg}"
-                firstMsg="0"
-            else
-                sendTelegramMessage "${msg}"
-            fi
-        done < <(fold -w 4000 <<<"$(printf '%s\n' "${msgArr[@]}")") 
-    else
-        sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
-    fi
 fi
 
 cleanExit
