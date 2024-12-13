@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-12-12
+# Small verbiage update
 # 2024-11-18
 # Small verbiage update
 # 2024-08-15
@@ -693,13 +695,13 @@ for containerName in "${containerIp[@]}"; do
         
         # Check it for sanity
         if [[ -z "${fileSeasonNum}" || -z "${fileEpisodeNum}" ]]; then
-            badExit "18" "Unable to parse season/episode number from file"
+            badExit "18" "Unable to parse season/episode number from file [${file}] [Season ${fileSeasonNum}][Episode ${fileEpisodeNum}]"
         fi
         if ! [[ "${fileSeasonNum}" =~ ^[0-9]+ ]]; then
-            badExit "19" "File season lookup returned non-interger [${fileSeasonNum}]"
+            badExit "19" "File [${file}] season lookup returned non-interger [${fileSeasonNum}]"
         fi
         if ! [[ "${fileEpisodeNum}" =~ ^[0-9]+ ]]; then
-            badExit "20" "File episode lookup returned non-interger [${fileEpisodeNum}]"
+            badExit "20" "File [${file}] episode lookup returned non-interger [${fileEpisodeNum}]"
         fi
         
         if [[ "${fileExists}" -eq "1" ]]; then
