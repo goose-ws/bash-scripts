@@ -1,6 +1,8 @@
 # Ignore prod .env files
 *.env
 plex-dlp-mirror.sources/*.env
+# Ignore lock file
+*.lock
 # Ignore .bak files
 *.bak
 # Ignore .log file
@@ -9,5 +11,7 @@ plex-dlp-mirror.sources/*.env
 *.txt
 # Ignore .db files
 *.db
-skeleton.bash
-number_bad_exists.bash
+# Ignore tools
+tools/*
+# This is a symlink
+sonarr-update-tba-4k.bash
