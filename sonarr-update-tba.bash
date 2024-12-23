@@ -35,6 +35,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2024-12-12
+# Small verbiage update
+# 2024-11-18
+# Small verbiage update
 # 2024-08-15
 # Updated the 'getContainerIp' function to handle networking types which have dashes in their name.
 # While sonarr currently only returns JSON in API calls, I may still move away from 'jq' in the future,
@@ -691,13 +695,13 @@ for containerName in "${containerIp[@]}"; do
         
         # Check it for sanity
         if [[ -z "${fileSeasonNum}" || -z "${fileEpisodeNum}" ]]; then
-            badExit "18" "Unable to parse season/episode number from file"
+            badExit "18" "Unable to parse season/episode number from file [${file}] [Season ${fileSeasonNum}][Episode ${fileEpisodeNum}]"
         fi
         if ! [[ "${fileSeasonNum}" =~ ^[0-9]+ ]]; then
-            badExit "19" "File season lookup returned non-interger [${fileSeasonNum}]"
+            badExit "19" "File [${file}] season lookup returned non-interger [${fileSeasonNum}]"
         fi
         if ! [[ "${fileEpisodeNum}" =~ ^[0-9]+ ]]; then
-            badExit "20" "File episode lookup returned non-interger [${fileEpisodeNum}]"
+            badExit "20" "File [${file}] episode lookup returned non-interger [${fileEpisodeNum}]"
         fi
         
         if [[ "${fileExists}" -eq "1" ]]; then
@@ -879,8 +883,8 @@ for containerName in "${containerIp[@]}"; do
             if [[ -z "${episodeName}" ]]; then
                 episodeName="[Unable to retrieve]"
             fi
-            msgArr+=("[${containerName}] Renamed ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
-            printOutput "2" "Renamed ${seriesTitle} - ${epCode} to: ${episodeName}"
+            msgArr+=("[${containerName}] Renamed file ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
+            printOutput "2" "Renamed file ${seriesTitle} - ${epCode} to: ${episodeName}"
         else
             printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
