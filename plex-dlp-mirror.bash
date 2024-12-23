@@ -86,7 +86,7 @@ realPath="$(realpath "${0}")"
 scriptName="$(basename "${0}")"
 lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
-updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/ytdlp-plex-mirror.bash"
+updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/plex-dlp-mirror.bash"
 # For ease of printing messages
 lineBreak=$'\n\n'
 scriptStart="$(($(date +%s%N)/1000000))"
