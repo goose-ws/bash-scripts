@@ -19,6 +19,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-01-05
+# Removed YT key rotations, as that breaks their TOS
+# Added Discord notifications
+# Added private Playlist functionality, but still need to fix sorting
 # 2024-12-23
 # Functional, I think
 # 2024-11-18
@@ -384,26 +388,40 @@ else
 fi
 }
 
+function sendDiscordImage {
+# Message to send should be passed as functional positional parameter #1
+# Image path should be passed as functional positional parameter #2
+if [[ -z "${discordWebhook}" ]]; then
+    printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
+    return 0
+fi
+
+# Make sure our message is not blank
+if [[ -z "${1}" ]]; then
+    printOutput "1" "No message passed to send to Discord"
+    return 1
+fi
+# Make sure our image exists
+if ! [[ -e "${2}" ]]; then
+    printOutput "1" "Image file [${2}] does not appear to exist"
+    return 1
+fi
+
+# Send it
+# Positional parameter 2 is the URL
+# Positional parameter 3 is the text
+# Positional parameter 4 is the image
+callCurlPost "discordimage" "${discordWebhook}" "${1}" "${2}"
+}
+
 function apiCount {
 # Notify of how many API calls were made
 if [[ "${apiCallsYouTube}" -ne "0" ]]; then
-    printOutput "3" "Made [${apiCallsYouTube}] API calls to YouTube"
-    printOutput "3" "Costed [${totalUnits}] units in total"
-    # Make the total cost breakdown block
-    readarray -t columnArr < <( (for apiKey in "${usedApiKeys[@]}"; do
-        echo "API Key [${apiKey}] | [${costArr[videos_${apiKey}]}] video | [${costArr[captions_${apiKey}]}] captions | [${costArr[channels_${apiKey}]}] channels | [${costArr[playlists_${apiKey}]}] playlists"
-    done
-    echo "Totals | [${totalVideoUnits}] video | [${totalCaptionsUnits}] captions | [${totalChannelsUnits}] channels | [${totalPlaylistsUnits}] playlists") | column -t -s "|")
-    # Now print each line of the columnArr via 'printOutput'
-    for line in "${columnArr[@]}"; do
-        printOutput "4" "${line}"
-    done
-fi
-if [[ "${apiCallsLemnos}" -ne "0" ]]; then
-    printOutput "3" "Made [${apiCallsLemnos}] API calls to LemnosLife"
+    printOutput "4" "Made [${apiCallsYouTube}] API calls to YouTube"
+    printOutput "4" "Costed [${totalUnits}] units in total | [${totalVideoUnits}] video | [${totalCaptionsUnits}] captions | [${totalChannelsUnits}] channels | [${totalPlaylistsUnits}] playlists"
 fi
 if [[ "${apiCallsSponsor}" -ne "0" ]]; then
-    printOutput "3" "Made [${apiCallsSponsor}] API calls to SponsorBlock"
+    printOutput "4" "Made [${apiCallsSponsor}] API calls to SponsorBlock"
 fi 
 }
 
@@ -493,6 +511,13 @@ elif [[ "${1}" == "tgimage" ]]; then
     # Positional parameter 5 is the image
     printOutput "5" "Issuing curl command [curl -skL -X POST \"${2}?chat_id=${3}&parse_mode=html&caption=$(rawUrlEncode "${4}")\" -F \"photo=@\"${5}\"\"]"
     curlOutput="$(curl -skL -X POST "${2}?chat_id=${3}&parse_mode=html&caption=$(rawUrlEncode "${4}")" -F "photo=@\"${5}\"" 2>&1)"
+elif [[ "${1}" == "discordimage" ]]; then
+    # We're sending an image to discord
+    # Positional parameter 2 is the URL
+    # Positional parameter 3 is the text
+    # Positional parameter 4 is the image
+    printOutput "5" "Issuing curl command [curl -skL -H \"Accept: application/json\" -H \"Content-Type: multipart/form-data\" -F \"file=@\\\"${4}\\\"\" -F \"payload_json={\\\"content\\\": \\\"${3//$'\n'/\\n}\\\"}\" -X POST \"${2}\"]"
+    curlOutput="$(curl -skL -H "Accept: application/json" -H "Content-Type: multipart/form-data" -F "file=@\"${4}\"" -F "payload_json={\"content\": \"${3//$'\n'/\\n}\"}" -X POST "${2}")"
 else
     printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
     curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
@@ -615,6 +640,80 @@ if [[ "${dbCount}" -eq "1" ]]; then
             # The video is being imported
             true
         fi
+    else
+        # The video is marked as skipped. Is SponsorBlock enabled?
+        if [[ "${sponsorblockEnable}" == "true" ]]; then
+            # Yes. Get its data.
+            sponsorApiCall "searchSegments?videoID=${1}"
+            sponsorCurl="${curlOutput}"
+            # Is it required, or upgraded?
+            if [[ "${sponsorblockRequire}" == "true" ]]; then
+                # Required. Is it found?
+                if [[ "${sponsorCurl}" == "Not Found" ]]; then
+                    # It was not found
+                    printOutput "5" "No SponsorBlock data available for video ID [${1}]"
+                    sponsorblockAvailable="Not found [$(date)]"
+                    vidStatus="sb_wait"
+                    vidError="SponsorBlock data required, but not available"
+                else
+                    # It was found
+                    printOutput "3" "SponsorBlock data found for video ID [${1}] -- Marking file for download"
+                    sponsorblockAvailable="Found [$(date)]"
+                    vidStatus="queued"
+                    vidError="null"
+                fi
+            else
+                # It is not required. We technically shouldn't end up here.
+                # Queue the video either way, since it's not required
+                vidStatus="queued"
+                # Is the sponsorblock data found?
+                if [[ "${sponsorCurl}" == "Not Found" ]]; then
+                    # It was not found
+                    printOutput "5" "No SponsorBlock data available for video ID [${1}]"
+                    sponsorblockAvailable="Not found [$(date)]"
+                else
+                    # It was found
+                    printOutput "3" "SponsorBlock data found for video ID [${1}] -- Marking file for download"
+                    sponsorblockAvailable="Found [$(date)]"
+                    vidError="null"
+                fi
+            fi
+            # Do our sqlite calls here
+            # Update the item's status
+            if sqDb "UPDATE source_videos SET STATUS = '${vidStatus//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+                printOutput "5" "Updated SponsorBlock enable for video ID [${1}]"
+            else
+                printOutput "1" "Failed to update SponsorBlock enable for video ID [${1}]"
+            fi
+
+            # Update the error, if needed
+            if [[ -n "${vidError}" ]]; then
+                # If we have a "NULL", the null it
+                if [[ "${vidError,,}" == "null" ]]; then
+                    if sqDb "UPDATE source_videos SET ERROR = null, UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+                        printOutput "5" "Removed error for video ID [${1}]"
+                    else
+                        printOutput "1" "Failed to remove error for video ID [${1}]"
+                    fi
+                else
+                    if sqDb "UPDATE source_videos SET ERROR = '${vidError//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+                        printOutput "5" "Updated error for video ID [${1}]"
+                    else
+                        printOutput "1" "Failed to update error for video ID [${1}]"
+                    fi
+                fi
+            fi
+            
+            # Update the SponsorBlock availability
+            if sqDb "UPDATE source_videos SET SB_AVAILABLE = '${sponsorblockAvailable//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+                printOutput "5" "Updated SponsorBlock availability for video ID [${1}]"
+            else
+                printOutput "1" "Failed to update SponsorBlock availability for video ID [${1}]"
+            fi
+            
+        fi
+        # Leave the function
+        return 0
     fi
 fi
 
@@ -1071,9 +1170,9 @@ if sqDb "UPDATE source_videos SET SB_ENABLE = '${sponsorblockEnable//\'/\'\'}', 
 else
     printOutput "1" "Failed to update SponsorBlock enable for video ID [${1}]"
 fi
-if [[ ! "${sponsorblockEnable}" == "disable" ]]; then
+if [[ ! "${sponsorblockRequire}" == "disable" ]]; then
     # Update the SponsorBlock requirement
-    if sqDb "UPDATE source_videos SET SB_REQUIRE = '${sponsorblockEnable//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
+    if sqDb "UPDATE source_videos SET SB_REQUIRE = '${sponsorblockRequire//\'/\'\'}', UPDATED = '$(date +%s)' WHERE ID = '${1//\'/\'\'}';"; then
         printOutput "5" "Updated SponsorBlock requirement for video ID [${1}]"
     else
         printOutput "1" "Failed to update SponsorBlock requirement for video ID [${1}]"
@@ -1192,122 +1291,35 @@ if [[ -z "${1}" ]]; then
     printOutput "1" "No API endpoint passed for YouTube API call"
     return 1
 fi
-if [[ "${#ytApiKeys[@]}" -ne "0" ]]; then
-    useLemnos="0"
-    if [[ -z "${apiKeyNum}" ]]; then
-        for apiKeyNum in "${!ytApiKeys[@]}"; do
-            printOutput "3" "Using YouTube API key [${apiKeyNum}] [${ytApiKeys[${apiKeyNum}]}]"
-            usedApiKeys+=("${ytApiKeys[${apiKeyNum}]}")
-            costArr["videos_${ytApiKeys[${apiKeyNum}]}"]=0
-            costArr["captions_${ytApiKeys[${apiKeyNum}]}"]=0
-            costArr["channels_${ytApiKeys[${apiKeyNum}]}"]=0
-            costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]=0
-            break
-        done
-        # We now are using the first key of our array
-    fi
-    # Use a YouTube API key, with no throttling
-    callCurlGet "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
-    # Check for a 400 or 403 error code
-    errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
-    if [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; then
-        while [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; do
-            if [[ "${errorCode}" == "403" ]]; then
-                printOutput "2" "API key [$(( apiKeyNum+ 1 ))] exhaused, rotating to next available key"
-            elif [[ "${errorCode}" == "400" ]]; then
-                printOutput "1" "API key [${ytApiKeys[${apiKeyNum}]}] appears to be invalid"
-                printOutput "2" "Rotating to next available API key"
-            fi
-            
-            # Shift to the next available API key
-            unset ytApiKeys["${apiKeyNum}"]
-            for apiKeyNum in "${!ytApiKeys[@]}"; do
-                printOutput "3" "Using YouTube API key [$(( apiKeyNum + 1 ))]"
-                usedApiKeys+=("${ytApiKeys[${apiKeyNum}]}")
-                costArr["videos_${ytApiKeys[${apiKeyNum}]}"]=0
-                costArr["captions_${ytApiKeys[${apiKeyNum}]}"]=0
-                costArr["channels_${ytApiKeys[${apiKeyNum}]}"]=0
-                costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]=0
-                break
-            done
-            
-            if [[ "${#ytApiKeys[@]}" -ne "0"  ]]; then
-                # Call curl again
-                callCurlGet "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKeys[${apiKeyNum}]}"
-                # Check for a 400 or 403 error code
-                errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
-                if ! [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; then
-                    (( apiCallsYouTube++ ))
-                    # Account for unit cost
-                    if [[ "${1%%\?*}" == "videos" ]]; then
-                        # Costs 5 units
-                        totalUnits="$(( totalUnits + 5 ))"
-                        totalVideoUnits="$(( totalVideoUnits + 5 ))"
-                        costArr["videos_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["videos_${ytApiKeys[${apiKeyNum}]}"]} + 5 ))"
-                    elif [[ "${1%%\?*}" == "captions" ]]; then
-                        # Costs 50 units
-                        totalUnits="$(( totalUnits + 50 ))"
-                        totalCaptionsUnits="$(( totalCaptionsUnits + 50 ))"
-                        costArr["captions_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["captions_${ytApiKeys[${apiKeyNum}]}"]} + 50 ))"
-                    elif [[ "${1%%\?*}" == "channels" ]]; then
-                        # Costs 8 units
-                        totalUnits="$(( totalUnits + 8 ))"
-                        totalChannelsUnits="$(( totalChannelsUnits + 8 ))"
-                        costArr["channels_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["channels_${ytApiKeys[${apiKeyNum}]}"]} + 8 ))"
-                    elif [[ "${1%%\?*}" == "playlists" ]]; then
-                        # Costs 3 units
-                        totalUnits="$(( totalUnits + 3 ))"
-                        totalPlaylistsUnits="$(( totalPlaylistsUnits + 3 ))"
-                        costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]} + 3 ))"
-                    fi
-                fi
-            else
-                printOutput "1" "Exhaused available API keys, switching to LemnosLife"
-                unset ytApiKeys
-                useLemnos="1"
-                break
-            fi
-        done
-    else
-        (( apiCallsYouTube++ ))
-        # Account for unit cost
-        if [[ "${1%%\?*}" == "videos" ]]; then
-            # Costs 5 units
-            totalUnits="$(( totalUnits + 5 ))"
-            totalVideoUnits="$(( totalVideoUnits + 5 ))"
-            costArr["videos_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["videos_${ytApiKeys[${apiKeyNum}]}"]} + 5 ))"
-        elif [[ "${1%%\?*}" == "captions" ]]; then
-            # Costs 50 units
-            totalUnits="$(( totalUnits + 50 ))"
-            totalCaptionsUnits="$(( totalCaptionsUnits + 50 ))"
-            costArr["captions_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["captions_${ytApiKeys[${apiKeyNum}]}"]} + 50 ))"
-        elif [[ "${1%%\?*}" == "channels" ]]; then
-            # Costs 8 units
-            totalUnits="$(( totalUnits + 8 ))"
-            totalChannelsUnits="$(( totalChannelsUnits + 8 ))"
-            costArr["channels_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["channels_${ytApiKeys[${apiKeyNum}]}"]} + 8 ))"
-        elif [[ "${1%%\?*}" == "playlists" ]]; then
-            # Costs 3 units
-            totalUnits="$(( totalUnits + 3 ))"
-            totalPlaylistsUnits="$(( totalPlaylistsUnits + 3 ))"
-            costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]="$(( ${costArr["playlists_${ytApiKeys[${apiKeyNum}]}"]} + 3 ))"
-        fi
+callCurlGet "https://www.googleapis.com/youtube/v3/${1}&key=${ytApiKey}"
+# Check for a 400 or 403 error code
+errorCode="$(yq -p json ".error.code" <<<"${curlOutput}")"
+if [[ "${errorCode}" == "403" || "${errorCode}" == "400" ]]; then
+    if [[ "${errorCode}" == "403" ]]; then
+        badExit "2" "API key [$(( apiKeyNum+ 1 ))] exhaused, unable to preform API calls."
+    elif [[ "${errorCode}" == "400" ]]; then
+        badExit "1" "API key [${ytApiKey}] appears to be invalid"
     fi
 else
-    useLemnos="1"
-fi
-
-if [[ "${useLemnos}" -eq "1" ]]; then
-    # If our endpoint is 'captions', Lemnos can't call it
-    if [[ "${1}" =~ ^captions\?.*$ ]]; then
-        printOutput "1" "LemnosLife is unable to call the 'captions' API endpoint -- Skipping request for [${1}]"
-        sleep 10
-        return 1
+    (( apiCallsYouTube++ ))
+    # Account for unit cost
+    if [[ "${1%%\?*}" == "videos" ]]; then
+        # Costs 5 units
+        totalUnits="$(( totalUnits + 5 ))"
+        totalVideoUnits="$(( totalVideoUnits + 5 ))"
+    elif [[ "${1%%\?*}" == "captions" ]]; then
+        # Costs 50 units
+        totalUnits="$(( totalUnits + 50 ))"
+        totalCaptionsUnits="$(( totalCaptionsUnits + 50 ))"
+    elif [[ "${1%%\?*}" == "channels" ]]; then
+        # Costs 8 units
+        totalUnits="$(( totalUnits + 8 ))"
+        totalChannelsUnits="$(( totalChannelsUnits + 8 ))"
+    elif [[ "${1%%\?*}" == "playlists" ]]; then
+        # Costs 3 units
+        totalUnits="$(( totalUnits + 3 ))"
+        totalPlaylistsUnits="$(( totalPlaylistsUnits + 3 ))"
     fi
-    # Use the free/no-key lemnoslife API, and throttle ourselves out of courtesy
-    callCurlGet "https://yt.lemnoslife.com/noKey/${1}" "goose's bash script - contact [github <at> goose <dot> ws] for any concerns or questions"
-    (( apiCallsLemnos++ ))
-    randomSleep "3" "7"
 fi
 }
 
@@ -3313,7 +3325,7 @@ for ii in "${plVidList[@]}"; do
         getFileRatingKey "${ii}"
         needNewOrder="1"
         callCurlPut "${plexAdd}/playlists/${1}/items?uri=server%3A%2F%2F${serverMachineId}%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F${ratingKey}&X-Plex-Token=${plexToken}"
-        printOutput "3" "Added video ID [${ii}][${titleById[_${ii}]}] to playlist [${1}]"
+        printOutput "3" "Added video ID [${ii}] to playlist [${1}]"
     fi
     if [[ "${needNewOrder}" -eq "1" ]]; then
         playlistGetOrder "${1}"
@@ -3448,8 +3460,9 @@ else
     tmpDir="$(mktemp -d -p "${tmpDir}")"
 fi
 
-if [[ "${#ytApiKeys[@]}" -eq "0" ]]; then
-    printOutput "2" "No YouTube Data API keys provided -- Will use LemnosLife, at a greatly reduced call rate"
+if [[ -z "${ytApiKey}" ]]; then
+    printOutput "2" "No YouTube Data API key provided"
+    varFail="1"
 fi
 if ! [[ -e "${cookieFile}" ]]; then
     printOutput "2" "No cookie file provided -- Will be unable to interact with 'Private' media"
@@ -3498,7 +3511,6 @@ dbVacuum="0"
 # Define some global variables
 sqliteDb="${realPath%/*}/.${scriptName}.db"
 apiCallsYouTube="0"
-apiCallsLemnos="0"
 apiCallsSponsor="0"
 totalUnits="0"
 totalVideoUnits="0"
@@ -3506,7 +3518,7 @@ totalCaptionsUnits="0"
 totalChannelsUnits="0"
 totalPlaylistsUnits="0"
 
-declare -A reindexArr watchedArr verifiedArr updateMetadataChannel updateMetadataVideo updatePlaylist updateSubtitles titleArr rkArr costArr chanIdLookup
+declare -A reindexArr watchedArr verifiedArr updateMetadataChannel updateMetadataVideo updatePlaylist updateSubtitles titleArr rkArr chanIdLookup
 
 while [[ -n "${*}" ]]; do
     case "${1,,}" in
@@ -4593,7 +4605,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
         printOutput "5" "Enable sponsorblock [${sponsorblockEnable}]"
         
         # If enabled, require sponsorblock?
-        if [[ "${sponsorblockRequire,,}" =~ ^(mark|remove)$ ]]; then
+        if [[ "${sponsorblockRequire,,}" =~ ^(true|false)$ ]]; then
             if ! [[ "${sponsorblockRequire,,}" == "true" ]]; then
                 sponsorblockRequire="false"
             else
@@ -4750,10 +4762,23 @@ if [[ "${skipSource}" -eq "0" ]]; then
             # We should use ${channelId} for the channel ID rather than ${ytId} which could be the handle        
             # Get a list of the videos for the channel
             printOutput "3" "Getting video list for channel ID [${channelId}]"
+            unset chanVidList
             if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
-                readarray -t chanVidList < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --cookies "${cookieFile}" --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
+                while read -r ytId; do
+                    if [[ "${ytId}" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+                        chanVidList+=("${ytId}")
+                    else
+                        printOutput "1" "File ID [${ytId}] failed to pass regex validation -- Skipping"
+                    fi
+                done < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --cookies "${cookieFile}" --print "%(id)s" "https://www.youtube.com/channel/${channelId}" 2>&1)
             else
-                readarray -t chanVidList < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --print "%(id)s" "https://www.youtube.com/channel/${channelId}")
+                while read -r ytId; do
+                    if [[ "${ytId}" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+                        chanVidList+=("${ytId}")
+                    else
+                        printOutput "1" "File ID [${ytId}] failed to pass regex validation -- Skipping"
+                    fi
+                done < <(yt-dlp --flat-playlist --playlist-reverse --no-warnings --print "%(id)s" "https://www.youtube.com/channel/${channelId}" 2>&1)
             fi
             
             printOutput "4" "Pulled list of [${#chanVidList[@]}] videos from channel"
@@ -4794,26 +4819,34 @@ if [[ "${skipSource}" -eq "0" ]]; then
             unset plVidList
             if [[ -n "${cookieFile}" && -e "${cookieFile}" ]]; then
                 while read -r ytId; do
-                    for idChk in "${plVidList[@]}"; do
-                        if [[ "${ytId}" == "${idChk}" ]]; then
-                            # We've already grabbed this video ID
-                            printOutput "5" "Video ID [${ytId}] already appears in playlist ID [${plId}] -- Skipping duplicate entry"
-                            continue 2
-                        fi
-                    done
-                    plVidList+=("${ytId}")
-                done < <(yt-dlp --cookies "${cookieFile}" --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
+                    if [[ "${ytId}" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+                        for idChk in "${plVidList[@]}"; do
+                            if [[ "${ytId}" == "${idChk}" ]]; then
+                                # We've already grabbed this video ID
+                                printOutput "5" "Video ID [${ytId}] already appears in playlist ID [${plId}] -- Skipping duplicate entry"
+                                continue 2
+                            fi
+                        done
+                        plVidList+=("${ytId}")
+                    else
+                        printOutput "1" "File ID [${ytId}] failed to pass regex validation -- Skipping"
+                    fi
+                done < <(yt-dlp --cookies "${cookieFile}" --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}" 2>&1)
             else
                 while read -r ytId; do
-                    for idChk in "${plVidList[@]}"; do
-                        if [[ "${ytId}" == "${idChk}" ]]; then
-                            # We've already grabbed this video ID
-                            printOutput "5" "Video ID [${ytId}] already appears in playlist ID [${plId}] -- Skipping duplicate entry"
-                            continue 2
-                        fi
-                    done
-                    plVidList+=("${ytId}")
-                done < <(yt-dlp --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}")
+                    if [[ "${ytId}" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+                        for idChk in "${plVidList[@]}"; do
+                            if [[ "${ytId}" == "${idChk}" ]]; then
+                                # We've already grabbed this video ID
+                                printOutput "5" "Video ID [${ytId}] already appears in playlist ID [${plId}] -- Skipping duplicate entry"
+                                continue 2
+                            fi
+                        done
+                        plVidList+=("${ytId}")
+                    else
+                        printOutput "1" "File ID [${ytId}] failed to pass regex validation -- Skipping"
+                    fi
+                done < <(yt-dlp --flat-playlist --no-warnings --print "%(id)s" "https://www.youtube.com/playlist?list=${plId}" 2>&1)
             fi
             
             if [[ "${#plVidList[@]}" -eq "0" ]]; then
@@ -5424,6 +5457,7 @@ if [[ "${#downloadQueue[@]}" -ne "0"  && "${skipDownload}" -eq "0" ]]; then
             if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg" ]]; then
                 printOutput "5" "Sending Telegram image message"
                 sendTelegramImage "<b>YouTube Video Downloaded</b>${lineBreak}${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
+                sendDiscordImage "**YouTube Video Downloaded**${lineBreak}${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}" "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].jpg"
             else
                 printOutput "5" "Sending Telegram text message"
                 sendTelegramMessage "<b>YouTube Video Downloaded</b>${lineBreak}${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}"
@@ -5477,6 +5511,7 @@ if [[ "${#watchedArr[@]}" -ne "0" ]]; then
 fi
 
 if [[ "${#updatePlaylist[@]}" -ne "0" ]]; then
+    printOutput "3" "########## Updating Collections & Playlists ###########"
     # For each playlist ID
     for plId in "${!updatePlaylist[@]}"; do
         plId="${plId#_}"
