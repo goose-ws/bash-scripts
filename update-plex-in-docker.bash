@@ -18,6 +18,10 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-01-06
+# Added Discord messaging (See updated .env file)
+# Updated printOutput verbosity levels (See updated .env file)
+# Updated some verbiage
 # 2024-07-29
 # Improved some wording
 # 2024-01-27
@@ -84,7 +88,7 @@ lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/update-plex-in-docker.bash"
 # For ease of printing messages
-lineBreak="$(printf "\r\n\r\n")"
+lineBreak=$'\n\n'
 
 #############################
 ##         Lockfile        ##
@@ -106,17 +110,22 @@ function printOutput {
 case "${1}" in
     0) logLevel="[reqrd]";; # Required
     1) logLevel="[error]";; # Errors
-    2) logLevel="[info] ";; # Informational
-    3) logLevel="[verb] ";; # Verbose
+    2) logLevel="[warn] ";; # Warnings
+    3) logLevel="[info] ";; # Informational
+    4) logLevel="[verb] ";; # Verbose
+    5) logLevel="[DEBUG]";; # Super Secret Debug Mode
 esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
+fi
+if [[ "${1}" -le "1" ]]; then
+    errorArr+=("${2}")
 fi
 }
 
 function removeLock {
 if rm -f "${lockFile}"; then
-    printOutput "3" "Lockfile removed"
+    printOutput "4" "Lockfile removed"
 else
     printOutput "1" "Unable to remove lockfile"
 fi
@@ -141,6 +150,44 @@ removeLock
 exit 0
 }
 
+function sendDiscordMessage {
+    # Message to send should be passed as functional positional parameter #1
+    if [[ -z "${discordWebhook}" ]]; then
+        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
+        return 0
+    fi
+
+    # Make sure our message is not blank
+    if [[ -z "${1}" ]]; then
+        printOutput "1" "No message passed to send to Discord"
+        return 1
+    fi
+
+    # Send the plain text message
+    # Positional parameter 2 is the URL
+    # Positional parameter 3 is the text
+    callCurlPost "${discordWebhook}" "${1}"
+}
+
+function callCurlPost {
+# URL to call should be ${1}
+if [[ -z "${1}" ]]; then
+    printOutput "1" "No input URL provided for POST"
+    return 1
+fi
+
+printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
+curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
+curlExitCode="${?}"
+if [[ "${curlExitCode}" -ne "0" ]]; then
+    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
+    while read -r i; do
+        printOutput "1" "Output: ${i}"
+    done <<<"${curlOutput}"
+    return 1
+fi
+}
+
 function sendTelegramMessage {
 # Message to send should be passed as function positional parameter #1
 # We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
@@ -161,7 +208,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
         printOutput "1" "Telegram bot API check failed"
     else
-        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+        printOutput "4" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
         for chanId in "${telegramChannelId[@]}"; do
             if [[ -n "${2}" ]]; then
                 chanId="${2}"
@@ -173,8 +220,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
             elif [[ -z "${telegramOutput}" ]]; then
                 printOutput "1" "Curl to Telegram to check channel returned an empty string"
             elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-                printOutput "3" "Curl exit code and null output checks passed"
-                printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
+                printOutput "4" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
                 telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
                 curlExitCode="${?}"
                 if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -182,7 +228,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                 elif [[ -z "${telegramOutput}" ]]; then
                     printOutput "1" "Curl to Telegram to send message returned an empty string"
                 else
-                    printOutput "3" "Curl exit code and null output checks passed"
+                    printOutput "5" "Curl exit code and null output checks passed"
                     # Check to make sure Telegram returned a true value for ok
                     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
                         printOutput "1" "Failed to send Telegram message:"
@@ -192,7 +238,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                         done < <(jq . <<<"${telegramOutput}")
                         printOutput "1" ""
                     else
-                        printOutput "2" "Telegram message sent successfully"
+                        printOutput "3" "Telegram message sent successfully"
                     fi
                 fi
             else
@@ -223,6 +269,7 @@ fi
 ##     Unique Functions    ##
 #############################
 function getNowPlaying {
+# TODO: Replace this with a 'yq' function
 nowPlaying="$(curl -skL -m 15 "${plexAdd}/status/sessions?X-Plex-Token=${plexAccessToken}" | grep -Eo "size=\"[[:digit:]]+\"")"
 nowPlaying="${nowPlaying#*size=\"}"
 nowPlaying="${nowPlaying%%\"*}"
@@ -261,7 +308,7 @@ case "${1,,}" in
         done < "${0}"
         if curl -skL "${updateURL}" -o "${0}"; then
             if chmod +x "${0}"; then
-                printOutput "1" "Update complete"
+                printOutput "0" "Update complete"
                 newStartLine="0"
                 while read -r i; do
                     if [[ "${newStartLine}" -eq "2" ]]; then
@@ -280,9 +327,9 @@ case "${1,,}" in
                     fi
                 done < <(curl -skL "${updateURL}")
 
-                printOutput "1"  "Changelog:"
+                printOutput "0"  "Changelog:"
                 for i in "${changelogArr[@]}"; do
-                    printOutput "1"  "${i}"
+                    printOutput "0"  "${i}"
                 done
                 cleanExit
             else
@@ -308,7 +355,7 @@ if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     echo "Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
-if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
+if ! [[ "${outputVerbosity}" =~ ^[1-5]$ ]]; then
     echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
@@ -395,13 +442,25 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
             fi
         fi
     else
-        printOutput "3" "No new updates available"
+        printOutput "4" "No new updates available"
     fi
 fi
 
 #############################
 ##         Payload         ##
 #############################
+# If we're being invoked by cron, sleep for up to ${cronSleep}
+if [[ -t 1 ]]; then
+    printOutput "5" "Script spawned by interactive terminal"
+else    
+    printOutput "4" "Script spawned by cron with PID [${$}]"
+    if [[ "${cronSleep}" =~ ^[0-9]+$ ]]; then
+        sleepTime="$(( RANDOM % cronSleep ))"
+        printOutput "3" "Sleeping for [${sleepTime}] seconds before continuing"
+        sleep "${sleepTime}"
+    fi
+fi
+
 # If using docker, we should ensure we have permissions to do so
 if ! docker version > /dev/null 2>&1; then
     badExit "6" "Do not appear to have permission to run on the docker socket (\`docker version\` returned non-zero exit code)"
@@ -409,7 +468,7 @@ fi
 
 # Get the IP address of the Plex container
 if [[ -z "${containerIp}" ]]; then
-    printOutput "2" "Attempting to automatically determine container IP address"
+    printOutput "3" "Attempting to automatically determine container IP address"
     # Find the type of networking the container is using
     unset containerNetworking
     while read i; do
@@ -417,18 +476,18 @@ if [[ -z "${containerIp}" ]]; then
             containerNetworking+=("${i}")
         fi
     done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${containerName}")
-    printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+    printOutput "4" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
     for i in "${containerNetworking[@]}"; do
         if [[ -z "${i}" ]]; then
-            printOutput "2" "No network type defined. Checking to see if networking is through another container."
+            printOutput "3" "No network type defined. Checking to see if networking is through another container."
             # IP address returned blank. Is it being networked through another container?
             containerIp="$(docker inspect "${containerName}" | jq -M -r ".[].HostConfig.NetworkMode")"
             containerIp="${containerIp#\"}"
             containerIp="${containerIp%\"}"
-            printOutput "3" "Network mode: ${containerIp%%:*}"
+            printOutput "4" "Network mode: ${containerIp%%:*}"
             if [[ "${containerIp%%:*}" == "container" ]]; then
                 # Networking is being run through another container. So we need that container's IP address.
-                printOutput "2" "Networking routed through another container. Retrieving IP address."
+                printOutput "4" "Networking routed through another container. Retrieving IP address."
                 containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
             else
                 printOutput "1" "Unable to determine networking type"
@@ -436,17 +495,17 @@ if [[ -z "${containerIp}" ]]; then
             fi
         elif [[ "${i}" == "host" ]]; then
             # Host networking, so we can probably use localhost
-            printOutput "3" "Networking type: ${i}"
+            printOutput "4" "Networking type: ${i}"
             containerIp="127.0.0.1"
         else
             # Something else. Let's see if we can get it via inspect.
-            printOutput "3" "Other networking type: ${i}"
+            printOutput "4" "Other networking type: ${i}"
             containerIp="$(docker inspect "${containerName}" | jq -M -r ".[] | .NetworkSettings.Networks.${i}.IPAddress")"
         fi
         if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
             printOutput "1" "Unable to determine IP address via networking mode: ${i}"
         else
-            printOutput "2" "Container IP address: ${containerIp}"
+            printOutput "3" "Container IP address: ${containerIp}"
             break
         fi
     done
@@ -457,7 +516,7 @@ fi
 
 # Build our address
 plexAdd="${plexScheme}://${containerIp}:${plexPort}"
-printOutput "3" "Server address: ${plexAdd}"
+printOutput "5" "Server address: ${plexAdd}"
 
 # Make sure our server is reachable, and we can check our version
 callCurl "${plexAdd}/servers?X-Plex-Token=${plexAccessToken}"
@@ -467,7 +526,7 @@ myVer="${myVer%%\"*}"
 if [[ "${myVer}" == "null" ]] || [[ -z "${myVer}" ]]; then
     badExit "8" "Unable to parse local version"
 else
-    printOutput "2" "Detected local version: ${myVer}"
+    printOutput "3" "Detected local version: ${myVer}"
 fi
 
 # Make sure we can check the latest version
@@ -478,11 +537,11 @@ currVer="${currVer%\"}"
 if [[ "${currVer}" == "null" ]] || [[ -z "${currVer}" ]]; then
     badExit "9" "Unable to parse latest version"
 else
-    printOutput "2" "Detected current version: ${currVer}"
+    printOutput "3" "Detected current version: ${currVer}"
 fi
 
 if [[ "${myVer}" == "${currVer}" ]]; then
-    printOutput "2" "Versions match, no update needed"
+    printOutput "3" "Versions match, no update needed"
     cleanExit;
 fi
 
@@ -493,7 +552,7 @@ currVer2="${currVer%-*}"
 currVer2="${currVer2//./}"
 if [[ "${myVer2}" -gt "${currVer2}" ]]; then
     # We already have a version more recent than the current, probably a beta/Plex Pass version
-    printOutput "2" "Local version newer than current stable version."
+    printOutput "3" "Local version newer than current stable version."
     cleanExit;
 fi
 
@@ -503,12 +562,12 @@ getNowPlaying;
 if [[ "${nowPlaying}" -ne "0" ]]; then
     # At least one person is watching something
     # We'll try again at the next cron run
-    printOutput "2" "Detected ${nowPlaying} users currently using Plex"
+    printOutput "3" "Detected ${nowPlaying} users currently using Plex"
     cleanExit;
 fi
 
 # Nobody is watching anything. Maybe someone was between episodes? Let's wait 1 minute and check.
-printOutput "3" "Sleeping for 60 seconds before re-checking play status"
+printOutput "4" "Sleeping for 60 seconds before re-checking play status"
 sleep 60
 
 # Is anyone playing anything?
@@ -517,7 +576,7 @@ getNowPlaying;
 if [[ "${nowPlaying}" -ne "0" ]]; then
     # At least one person is watching something
     # We'll try again at the next cron run
-    printOutput "2" "Detected ${nowPlaying} users currently using Plex"
+    printOutput "3" "Detected ${nowPlaying} users currently using Plex"
     cleanExit;
 fi
 
@@ -530,25 +589,32 @@ if [[ "${repairDatabase,,}" =~ ^(yes|true)$ ]]; then
         toolVersion="$(docker exec "${containerName}" grep -m 1 "# Version:" "/root/db_repair_new.sh" 2>/dev/null | awk '{print $3}')"
         toolDate="$(docker exec "${containerName}" grep -m 1 "# Date:" "/root/db_repair_new.sh" 2>/dev/null | awk '{print $3}')"
         if [[ -n "${toolDate}" && -n "${toolVersion}" ]]; then
-            printOutput "2" "Newest copy of repair tool pulled"
-            printOutput "3" "Tool Version: ${toolVersion} | Tool Date: ${toolDate}"
+            printOutput "4" "Newest copy of repair tool pulled"
+            printOutput "5" "Tool Version: ${toolVersion} | Tool Date: ${toolDate}"
             if docker exec "${containerName}" chmod +x "/root/db_repair_new.sh" > /dev/null 2>&1; then
-                printOutput "3" "Tool set as executable successfully"
+                printOutput "5" "Tool set as executable successfully"
                 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
                     dockerHost="$(</etc/hostname)"
-                    printOutput "3" "Got hostname: ${dockerHost}"
-                    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for database maintenance and repair, and server upgrade"
-                    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+                    printOutput "4" "Got hostname: ${dockerHost}"
+                    eventText="<b>Plex Server Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for database maintenance and repair, and server upgrade"
+                    printOutput "4" "Telegram messaging enabled -- Passing message to function"
                     sendTelegramMessage "${eventText}"
                 fi
-                printOutput "2" "Initiating database repair -- This may take some time"
-                printOutput "2" "Begin repair tool output"
-                printOutput "2" "============================"
+                if [[ -n "${discordWebhook}" ]]; then
+                    dockerHost="$(</etc/hostname)"
+                    printOutput "4" "Got hostname: ${dockerHost}"
+                    eventText="**Plex Server Update for ${dockerHost%%.*}**${lineBreak}Stopping Plex Media Server for database maintenance and repair, and server upgrade"
+                    printOutput "4" "Discord messaging enabled -- Passing message to function"
+                    sendDiscordMessage "${eventText}"
+                fi
+                printOutput "3" "Initiating database repair -- This may take some time"
+                printOutput "4" "Begin repair tool output"
+                printOutput "4" "============================"
                 while read -r i; do
-                    printOutput "2" "${i}"
+                    printOutput "4" "${i}"
                 done < <(docker exec "${containerName}" /root/db_repair_new.sh stop check auto exit 2>&1)
-                printOutput "2" "============================"
-                printOutput "2" "End of repair tool output"
+                printOutput "4" "============================"
+                printOutput "4" "End of repair tool output"
             else
                 printOutput "1" "Unable to set tool as executable -- Skipping database repair"
             fi
@@ -561,11 +627,18 @@ if [[ "${repairDatabase,,}" =~ ^(yes|true)$ ]]; then
 else
 	if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
 		dockerHost="$(</etc/hostname)"
-		printOutput "3" "Got hostname: ${dockerHost}"
-		eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for server upgrade"
-		printOutput "2" "Telegram messaging enabled -- Passing message to function"
+		printOutput "4" "Got hostname: ${dockerHost}"
+		eventText="<b>Plex Server Update for ${dockerHost%%.*}</b>${lineBreak}Stopping Plex Media Server for server upgrade"
+		printOutput "4" "Telegram messaging enabled -- Passing message to function"
 		sendTelegramMessage "${eventText}"
 	fi
+    if [[ -n "${discordWebhook}" ]]; then
+        dockerHost="$(</etc/hostname)"
+        printOutput "4" "Got hostname: ${dockerHost}"
+        eventText="**Plex Server Update for ${dockerHost%%.*}**${lineBreak}Stopping Plex Media Server for server upgrade"
+        printOutput "4" "Discord messaging enabled -- Passing message to function"
+        sendDiscordMessage "${eventText}"
+    fi
 fi
 
 # Clean out the Codecs folder, because apparently that sometimes breaks things between upgrades if you don't
@@ -578,7 +651,7 @@ else
 fi
 
 # Restart the Docker container.
-printOutput "2" "Restarting container"
+printOutput "3" "Restarting container"
 if docker restart "${containerName}" > /dev/null 2>&1; then
     printOutput "3" "Container restarted successfully"
 else
@@ -587,10 +660,17 @@ fi
 
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
     dockerHost="$(</etc/hostname)"
-    eventText="<b>Plex Update for ${dockerHost%%.*}</b>${lineBreak}Plex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>"
-    printOutput "3" "Got hostname: ${dockerHost}"
-    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+    eventText="<b>Plex Server Update for ${dockerHost%%.*}</b>${lineBreak}Plex Media Server restarted for update from version <i>${myVer}</i> to version <i>${currVer}</i>"
+    printOutput "4" "Got hostname: ${dockerHost}"
+    printOutput "4" "Telegram messaging enabled -- Passing message to function"
     sendTelegramMessage "${eventText}"
+fi
+if [[ -n "${discordWebhook}" ]]; then
+    dockerHost="$(</etc/hostname)"
+    eventText="**Plex Server Update for ${dockerHost%%.*}**${lineBreak}Plex Media Server restarted for update from version *${myVer}* to version *${currVer}*"
+    printOutput "4" "Got hostname: ${dockerHost}"
+    printOutput "4" "Discord messaging enabled -- Passing message to function"
+    sendDiscordMessage "${eventText}"
 fi
 
 #############################

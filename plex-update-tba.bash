@@ -16,6 +16,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-01-06
+# Added Discord support (See updated .env)
+# Added a check to prevent false positive matches
 # 2024-11-18
 # Small verbiage update
 # 2024-07-24
@@ -65,7 +68,7 @@ lockFile="${realPath%/*}/.${scriptName}.lock"
 # URL of where the most updated version of the script is
 updateURL="https://raw.githubusercontent.com/goose-ws/bash-scripts/main/plex-update-tba.bash"
 # For ease of printing messages
-lineBreak="$(printf "\r\n\r\n")"
+lineBreak=$'\n\n'
 
 #############################
 ##         Lockfile        ##
@@ -125,6 +128,44 @@ fi
 function cleanExit {
 removeLock
 exit 0
+}
+
+function sendDiscordMessage {
+    # Message to send should be passed as functional positional parameter #1
+    if [[ -z "${discordWebhook}" ]]; then
+        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
+        return 0
+    fi
+
+    # Make sure our message is not blank
+    if [[ -z "${1}" ]]; then
+        printOutput "1" "No message passed to send to Discord"
+        return 1
+    fi
+
+    # Send the plain text message
+    # Positional parameter 2 is the URL
+    # Positional parameter 3 is the text
+    callCurlPost "${discordWebhook}" "${1}"
+}
+
+function callCurlPost {
+# URL to call should be ${1}
+if [[ -z "${1}" ]]; then
+    printOutput "1" "No input URL provided for POST"
+    return 1
+fi
+
+printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
+curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
+curlExitCode="${?}"
+if [[ "${curlExitCode}" -ne "0" ]]; then
+    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
+    while read -r i; do
+        printOutput "1" "Output: ${i}"
+    done <<<"${curlOutput}"
+    return 1
+fi
 }
 
 function sendTelegramMessage {
@@ -473,6 +514,15 @@ for pattern in "${searchPatterns[@]}"; do
     # Get a list of matching items
     while read -r i; do
         # ${i} is the episode rating key
+        # Get the item's verified title
+        itemTitle="$(yq -p xml ".MediaContainer.Video  | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${i}\" ) .\"+@title\"" <<<"${curlOutput}")"
+        
+        # If the verified title is not the search pattern, we don't really need to process it
+        if ! [[ "${itemTitle^^}" == "${pattern^^}" ]]; then
+            printOutput "4" "Series title [${itemTitle^^}] does not match pattern [${pattern^^}] -- Skipping"
+            continue
+        fi
+        
         # Get the item's parent library ID
         itemLibraryId="$(yq -p xml ".MediaContainer.Video  | ([] + .) | .[] | select ( .\"+@ratingKey\" == \"${i}\" ) .\"+@librarySectionID\"" <<<"${curlOutput}")"
         # Get the item's parent series rating key
@@ -526,8 +576,7 @@ for pattern in "${searchPatterns[@]}"; do
         # If we've gotten this far, we can safely add the file rating key to our refresh array
         plexArr+=("${i}")
         
-        # Store the pretty-title for later
-        
+        # Store the pretty-title for later        
         titleArr["${i}"]="${itemSeriesTitle} - S$(printf '%02d' "${itemSeasonIndex}")E$(printf '%02d' "${itemEpisodeIndex}")"
         printOutput "4" "Added item to metadata refresh queue"
     done < <(yq -p xml ".MediaContainer.Video  | ([] + .) | .[] | .\"+@ratingKey\"" <<<"${curlOutput}")
@@ -563,13 +612,22 @@ else
 fi
 
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -ne "0" ]]; then
-    printOutput "4" "Counted ${#msgArr[@]} messages to send:"
+    printOutput "4" "Counted ${#msgArr[@]} Telegram messages to send:"
     for i in "${msgArr[@]}"; do
         printOutput "4" "- ${i}"
     done
     eventText="<b>Plex metadata update for ${serverName}</b>${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
-    printOutput "3" "Sending telegram messages"
+    printOutput "3" "Sending Telegram messages"
     sendTelegramMessage "${eventText}"
+fi
+if [[ -n "${discordWebhook}" ]]; then
+    printOutput "4" "Counted ${#msgArr[@]} Discord messages to send:"
+    for i in "${msgArr[@]}"; do
+        printOutput "4" "- ${i}"
+    done
+    eventText="**Plex metadata update for ${serverName}**${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
+    printOutput "3" "Sending Discord messages"
+    sendDiscordMessage "${eventText}"
 fi
 
 #############################
