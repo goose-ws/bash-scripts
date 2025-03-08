@@ -32,15 +32,6 @@ Scripts here include:
 
 ---
 
-| `plex-dlp-mirror.bash` |
-| :---: |
-| A script that mirrors content to Plex, powered by yt-dlp under the hood. Requires [yq](https://github.com/mikefarah/yq). |
-| Link to Script: [plex-dlp-mirror.bash](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.bash) |
-| Link to `.env` File: [plex-dlp-mirror.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.env.example) |
-| Link to Source `.env` File: [00 - Sample.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.sources/00%20-%20Sample.env.example) |
-
----
-
 | `plex-update-tba.bash` |
 | :---: |
 | A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. Requires [yq](https://github.com/mikefarah/yq). |
