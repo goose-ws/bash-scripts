@@ -32,6 +32,7 @@ Scripts here include:
 
 ---
 
+<<<<<<< HEAD
 | `plex-dlp-mirror.bash` |
 | :---: |
 | A script that mirrors content to Plex, powered by yt-dlp under the hood. Requires [yq](https://github.com/mikefarah/yq). |
@@ -41,6 +42,8 @@ Scripts here include:
 
 ---
 
+=======
+>>>>>>> testing
 | `plex-update-tba.bash` |
 | :---: |
 | A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. Requires [yq](https://github.com/mikefarah/yq). |
