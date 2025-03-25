@@ -35,6 +35,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-03-25
+# Added a safety check to verify the file names match the S#E# pattern, as other formats (Daily shows)
+# will not parse correctly. Added a TODO to address daily shows...eventually.
 # 2024-12-12
 # Small verbiage update
 # 2024-11-18
@@ -186,6 +189,7 @@ case "${1}" in
     1) logLevel="[error]";; # Errors
     2) logLevel="[info] ";; # Informational
     3) logLevel="[verb] ";; # Verbose
+    5) logLevel="[DEBUG]";; # Debug
 esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
@@ -659,6 +663,16 @@ for containerName in "${containerIp[@]}"; do
                 fileExists="1"
             fi
         fi
+        
+        # Make sure we're dealing with a file that has a S#E# pattern, and not another pattern (Daily)
+        # TODO: Add support for shows with a "Daily" episode code pattern
+        if [[ "${file}" =~ ^.*"S"[0-9]+"E"[0-9]+.*$ ]]; then
+            printOutput "5" "Validated Season/Episode code formatting in file name"
+        else
+            printOutput "1" "Unable to validate Season/Episode code formatting for [${file}] -- Skipping"
+            continue
+        fi
+        
         # Define the season and episode numbers  
         unset epCode
         storeCode="0"
