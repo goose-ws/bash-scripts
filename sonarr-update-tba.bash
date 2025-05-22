@@ -478,13 +478,14 @@ fi
 #############################
 ##         Payload         ##
 #############################
-# If using docker, we should ensure we have permissions to do so
-if ! docker version > /dev/null 2>&1; then
-    badExit "8" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
-fi
-
 for containerName in "${containerIp[@]}"; do
     printOutput "2" "Processing instance: ${containerName}"
+    if [[ "${containerName%%:*}" == "docker" ]]; then
+        # If using docker, we should ensure we have permissions to do so
+        if ! docker version > /dev/null 2>&1; then
+            badExit "8" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
+        fi
+    fi
     getContainerIp "${containerName}"
 
     # Read Sonarr config file
