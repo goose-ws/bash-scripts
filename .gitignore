@@ -17,3 +17,4 @@ tools/*
 sonarr-update-tba-4k.bash
 # No need for any of the sub-files
 youtube_to_podcast-*.bash
+plex-dlp-mirror.sources/
