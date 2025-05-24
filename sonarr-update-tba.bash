@@ -35,6 +35,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-05-24
+# Removed the check for docker socket permission, if docker is not required
+# Added support for Discord messages
 # 2025-03-25
 # Added a safety check to verify the file names match the S#E# pattern, as other formats (Daily shows)
 # will not parse correctly. Added a TODO to address daily shows...eventually.
@@ -221,6 +224,44 @@ fi
 function cleanExit {
 removeLock
 exit 0
+}
+
+function sendDiscordMessage {
+    # Message to send should be passed as functional positional parameter #1
+    if [[ -z "${discordWebhook}" ]]; then
+        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
+        return 0
+    fi
+
+    # Make sure our message is not blank
+    if [[ -z "${1}" ]]; then
+        printOutput "1" "No message passed to send to Discord"
+        return 1
+    fi
+
+    # Send the plain text message
+    # Positional parameter 2 is the URL
+    # Positional parameter 3 is the text
+    callCurlPost "${discordWebhook}" "${1}"
+}
+
+function callCurlPost {
+# URL to call should be ${1}
+if [[ -z "${1}" ]]; then
+    printOutput "1" "No input URL provided for POST"
+    return 1
+fi
+
+printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
+curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
+curlExitCode="${?}"
+if [[ "${curlExitCode}" -ne "0" ]]; then
+    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
+    while read -r i; do
+        printOutput "1" "Output: ${i}"
+    done <<<"${curlOutput}"
+    return 1
+fi
 }
 
 function sendTelegramMessage {
@@ -918,6 +959,15 @@ if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -
     printOutput "3" "Got hostname: ${dockerHost}"
     printOutput "2" "Telegram messaging enabled -- Passing message to function"
     sendTelegramMessage "${eventText}"
+fi
+if [[ -n "${discordWebhook}" ]]; then
+    printOutput "4" "Counted ${#msgArr[@]} Discord messages to send:"
+    for i in "${msgArr[@]}"; do
+        printOutput "4" "- ${i}"
+    done
+    eventText="**Plex metadata update for ${serverName}**${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
+    printOutput "3" "Sending Discord messages"
+    sendDiscordMessage "${eventText}"
 fi
 
 #############################
