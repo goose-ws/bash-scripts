@@ -150,42 +150,109 @@ removeLock
 exit 0
 }
 
+# Sends a message to Discord using a webhook URL
+# Usage: sendDiscordMessage "Your message text here"
 function sendDiscordMessage {
-    # Message to send should be passed as functional positional parameter #1
+    local message="${1}" # Message to send (positional parameter #1)
+
+    # Check if the Discord Webhook URL is configured
     if [[ -z "${discordWebhook}" ]]; then
-        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
-        return 0
+        printOutput "1" "No Discord Webhook URL provided (discordWebhook variable not set)."
+        return 1 # Return non-zero for error
     fi
 
-    # Make sure our message is not blank
-    if [[ -z "${1}" ]]; then
-        printOutput "1" "No message passed to send to Discord"
+    # Make sure the message is not blank
+    if [[ -z "${message}" ]]; then
+        printOutput "1" "No message passed to send to Discord."
         return 1
     fi
 
-    # Send the plain text message
-    # Positional parameter 2 is the URL
-    # Positional parameter 3 is the text
-    callCurlPost "${discordWebhook}" "${1}"
+    # --- Construct the JSON payload ---
+    # Basic method: Escape double quotes and backslashes within the message.
+    # This might not cover all edge cases for complex messages.
+    local escaped_message
+    escaped_message=${message//\\/\\\\} # Escape backslashes first
+    escaped_message=${escaped_message//\"/\\\"} # Escape double quotes
+    local json_payload="{\"content\": \"${escaped_message}\"}"
+
+    # --- OR: More robust method using jq (if available) ---
+    # Uncomment the following lines and ensure 'jq' is installed if you prefer this.
+    # if ! command -v jq &> /dev/null; then
+    #     printOutput "1" "'jq' command not found, cannot safely construct JSON payload."
+    #     # Fallback to basic method or return error
+    #     # return 1
+    # else
+    #     # Use jq to safely create the JSON string
+    #     json_payload=$(jq -n --arg msg "$message" '{content: $msg}')
+    #     if [[ $? -ne 0 || -z "$json_payload" ]]; then
+    #          printOutput "1" "Failed to construct JSON payload using jq."
+    #          return 1
+    #     fi
+    # fi
+    # --- End of jq method ---
+
+
+    printOutput "5" "Attempting to send message to Discord."
+    # Send the JSON payload using callCurlPost
+    # Pass the webhook URL as ${1} and the JSON payload as ${2}
+    callCurlPost "${discordWebhook}" "${json_payload}"
+    local curl_exit_code=$? # Capture the exit code from callCurlPost
+
+    if [[ "${curl_exit_code}" -ne "0" ]]; then
+        printOutput "1" "Failed to send message to Discord via callCurlPost."
+        return 1 # Propagate the error
+    else
+        printOutput "5" "Message potentially sent to Discord successfully."
+        return 0 # Indicate success
+    fi
 }
 
+# Performs a curl POST request with JSON data
+# Usage: callCurlPost "URL" "JSON_DATA_STRING"
 function callCurlPost {
-# URL to call should be ${1}
-if [[ -z "${1}" ]]; then
-    printOutput "1" "No input URL provided for POST"
-    return 1
-fi
+    local url="${1}"      # URL to call should be ${1}
+    local data="${2}"     # JSON data payload should be ${2}
+    local curlOutput
+    local curlExitCode
 
-printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
-curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
-curlExitCode="${?}"
-if [[ "${curlExitCode}" -ne "0" ]]; then
-    printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
-    while read -r i; do
-        printOutput "1" "Output: ${i}"
-    done <<<"${curlOutput}"
-    return 1
-fi
+    # Check if URL is provided
+    if [[ -z "${url}" ]]; then
+        printOutput "1" "No input URL provided for POST."
+        return 1
+    fi
+
+    # Check if data is provided (optional, but needed for Discord)
+    if [[ -z "${data}" ]]; then
+        printOutput "1" "No data payload provided for POST."
+        return 1
+    fi
+
+    # Use -H to set Content-Type header
+    # Use -d to send the data payload
+    # Use --fail to make curl return non-zero on HTTP errors (4xx, 5xx)
+    printOutput "5" "Issuing curl command: curl -skL --fail -X POST -H \"Content-Type: application/json\" -d <data> \"${url}\""
+    # Note: We don't print the actual data here for brevity/security
+
+    curlOutput="$(curl -skL --fail -X POST \
+                      -H "Content-Type: application/json" \
+                      -d "${data}" \
+                      "${url}" 2>&1)"
+    curlExitCode="${?}"
+
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+        printOutput "1" "Curl returned non-zero exit code ${curlExitCode}."
+        # Read and print each line of the output for better logging
+        while IFS= read -r line; do
+            # Avoid printing empty lines if the output ends with newlines
+            [[ -n "$line" ]] && printOutput "1" "Output: ${line}"
+        done <<< "${curlOutput}"
+        return 1 # Return error
+    fi
+
+    printOutput "5" "Curl POST request successful."
+    # Optionally print successful output if needed
+    # printOutput "5" "Curl Output: ${curlOutput}"
+    return 0 # Return success
 }
 
 function sendTelegramMessage {
