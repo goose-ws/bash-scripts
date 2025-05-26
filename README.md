@@ -1,5 +1,23 @@
 # Bash Script Collection
 
+## Table of Contents
+- [About](#about)
+- [Scripts](#scripts)
+- [Dependencies](#dependencies)
+- [License](#license)
+- [Contributing](#contributing)
+- [Captive DNS (`captive-dns.bash`)](#captive-dns-captive-dnsbash)
+- [Linode Dynamic DNS (`linode-dynamic-dns.bash`)](#linode-dynamic-dns-linode-dynamic-dnsbash)
+- [Plex DLP Mirror (`plex-dlp-mirror.bash`)](#plex-dlp-mirror-plex-dlp-mirrorbash)
+- [Plex Update TBA (`plex-update-tba.bash`)](#plex-update-tba-plex-update-tbabash)
+- [Sonarr Group Notifications (`sonarr-group-notifications.bash`)](#sonarr-group-notifications-sonarr-group-notificationsbash)
+- [Sonarr Update TBA (`sonarr-update-tba.bash`)](#sonarr-update-tba-sonarr-update-tbabash)
+- [Unifi Client Monitor (`unifi_client_monitor.bash`)](#unifi-client-monitor-unifi_client_monitorbash)
+- [Update Plex in Docker (`update-plex-in-docker.bash`)](#update-plex-in-docker-update-plex-in-dockerbash)
+- [YouTube to Podcast (`youtube_to_podcast.bash`)](#youtube-to-podcast-youtube_to_podcastbash)
+- [Todo](#todo)
+- [Done ✓](#done-)
+
 ## About
 
 This repository contains a collection of Bash scripts designed for various automation and utility tasks. These scripts are primarily passion projects. I have a moderate amount of skill in bash. I am certainly no expert, but I am no novice either. There are likely better ways to execute the flow of logic I am trying to achieve in these scripts! If you have a suggestion, I would welcome a pull request. All scripts require **Bash version 4 or greater** to run.
@@ -139,29 +157,6 @@ If you happen to find these scripts particularly helpful and have a few bucks to
     * Supports multiple Sonarr instances if they are Docker-based; single host-based instance also supported.
     * Ignore lists for libraries, series, and episodes.
     * Manages a lockfile to prevent concurrent execution.
-
----
-
-### Unifi Client Monitor (`unifi_client_monitor.bash`)
-
-* **Purpose**: Monitors `/var/log/daemon.log` on a Unifi device (likely a UDM) for DHCPACK entries, logs new client connections to an SQLite database, and sends Telegram notifications for newly seen clients or MAC addresses.
-* **Requirements**:
-    * `yq` (will attempt to download if missing)
-    * `sqlite3` (will attempt to `apt install` if missing)
-    * Dependencies: `curl`, `date`, `sqlite3`, `yq`
-* **Installation**:
-    1.  Download the `.bash` script and `unifi_client_monitor.env.example`.
-    2.  Rename `unifi_client_monitor.env.example` to `unifi_client_monitor.env` and customize with Telegram bot details and local DNS server IP.
-    3.  Place both files in a suitable directory on your Unifi device.
-    4.  Make the script executable: `chmod +x unifi_client_monitor.bash`.
-    5.  Run the script; it will background itself to continuously monitor the log. Consider using [on-boot.d](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) for persistance.
-* **Features**:
-    * Continuously monitors `/var/log/daemon.log` for new DHCP leases.
-    * Logs new client details (VLAN, MAC, IP, Name from DHCP, Timestamp) to an SQLite database (`.unifi_client_monitor.db`).
-    * Sends a Telegram notification when a new client (or a known MAC with a new IP/VLAN) is detected.
-    * Checks against a local DNS server for a hostname associated with the new IP address.
-    * Indicates if the MAC address has been seen before.
-    * Manages a lockfile to prevent concurrent execution of the main script (the monitoring part runs in the background).
 
 ---
 
