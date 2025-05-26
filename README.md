@@ -8,7 +8,7 @@ This repository contains a collection of Bash scripts designed for various autom
 
 If you encounter any issues or have questions, please raise an issue on the [GitHub Issues page](https://github.com/goose-ws/bash-scripts/issues) for the repository.
 
-For bugs, feature requests, and enhancements, reach out via the [Issues page](https://github.com/goose-ws/bash-scripts/issues). If you just need support, reach out to me on IRC. I idle in `#goose` on: [ChatSpike](irc://irc.ChatSpike.net/#goose), [Libera](irc://irc.Libera.chat/#goose), [OFTC](irc://irc.oftc.net/#goose), [SlashNet](irc://irc.slashnet.org/#goose), and [SnooNet](irc://irc.SnooNet.org/#goose). I usually respond within a few hours of being highlighted.
+For bugs, feature requests, and enhancements, reach out via the [Issues page](https://github.com/goose-ws/bash-scripts/issues). If you just need support, reach out to me on IRC. I idle in `#goose` on: [ChatSpike](http://www.chatspike.net/), [Libera](https://libera.chat/), [OFTC](https://www.oftc.net/), [SlashNet](http://www.slashnet.org/), and [SnooNet](https://snoonet.org/). I usually respond within a few hours of being highlighted.
 
 ## Scripts
 
