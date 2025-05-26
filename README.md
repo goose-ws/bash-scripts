@@ -8,7 +8,7 @@ This repository contains a collection of Bash scripts designed for various autom
 
 If you encounter any issues or have questions, please raise an issue on the [GitHub Issues page](https://github.com/goose-ws/bash-scripts/issues) for the repository.
 
-For bugs, feature requests, and enhancements, reach out via the [Issues page](https://github.com/goose-ws/bash-scripts/issues). If you just need support, reach out to me on IRC. I idle in `#goose` on: [irc://irc.ChatSpike.net/#goose](ChatSpike), [irc://irc.Libera.chat/#goose](Libera), [irc://irc.oftc.net/#goose](OFTC), [irc://irc.slashnet.org/#goose](SlashNet), and [irc://irc.SnooNet.org/#goose](SnooNet). I usually respond within a few hours of being highlighted.
+For bugs, feature requests, and enhancements, reach out via the [Issues page](https://github.com/goose-ws/bash-scripts/issues). If you just need support, reach out to me on IRC. I idle in `#goose` on: [ChatSpike](irc://irc.ChatSpike.net/#goose), [Libera](irc://irc.Libera.chat/#goose), [OFTC](irc://irc.oftc.net/#goose), [SlashNet](irc://irc.slashnet.org/#goose), and [SnooNet](irc://irc.SnooNet.org/#goose). I usually respond within a few hours of being highlighted.
 
 ## Scripts
 
@@ -31,7 +31,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 I welcome any discussion and pull requests, as outlined above. I wrote these scripts for myself, but I'm sharing them with the world, as perhaps they can be useful to others in the same way that they've been useful to me. Scripts in this repository will always be freely available.
 
-If you happen to find these scripts particularly helpful and have a few bucks to spare, you can [https://github.com/sponsors/goose-ws](buy me a drink)! No pressure at all, but any support is greatly appreciated!
+If you happen to find these scripts particularly helpful and have a few bucks to spare, you can [buy me a drink](https://github.com/sponsors/goose-ws)! No pressure at all, but any support is greatly appreciated!
 
 ---
 
