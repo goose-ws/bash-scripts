@@ -1,76 +1,214 @@
-# bash-scripts
+# Bash Script Collection
 
-This is a collection of bash scripts I've hacked together over time which may be useful enough that I'm sharing them on GitHub
+## About
 
-**Please do not use or expect anything from the 'testing' branch to work. Only scripts from the 'main' branch are polished enough to be expected to work reliably. And even then, consider them 'beta v2' stable, not full production stable.**
+This repository contains a collection of Bash scripts designed for various automation and utility tasks. These scripts are primarily passion projects. I have a moderate amount of skill in bash. I am certainly no expert, but I am no novice either. There are likely better ways to execute the flow of logic I am trying to achieve in these scripts! If you have a suggestion, I would welcome a pull request. All scripts require **Bash version 4 or greater** to run.
 
-I have a moderate amount of skill in bash. I am no expert, but I am no novice either. There may be better ways to execute the flow of logic I am trying to achieve in these scripts. If you have a suggestion, I would welcome a pull request. If you have an issue, you are welcome to create an Issue or reach out to me on IRC. I idle in #goose on Libera, and usually respond within a few hours of being highlighted.
+**Please do not use or expect anything from the 'testing' branch to work. Only scripts from the 'main' branch are polished enough to be expected to work reliably.**
 
-Unless otherwise noted, all scripts in this repository are covered by the [MIT liencse](https://github.com/goose-ws/bash-scripts/blob/main/LICENSE)
+If you encounter any issues or have questions, please raise an issue on the [GitHub Issues page](https://github.com/goose-ws/bash-scripts/issues) for the repository.
 
-These scripts will generally work by sourcing the "Config" options to a `.env` file with the same base file name, and kept in the same directory. So for example, if you want to use the `captive-dns.bash` script, you will need to place `captive-dns.env` in the same directory next to it. The config file names are dynamic to the script file name. So if you wanted to rename `captive-dns.bash` to `force-dns.bash`, then your config file would need to be `force-dns.env` in the same directory.
+For bugs, feature requests, and enhancements, reach out via the [Issues page](https://github.com/goose-ws/bash-scripts/issues). If you just need support, reach out to me on IRC. I idle in `#goose` on: [ChatSpike](http://www.chatspike.net/), [Libera](https://libera.chat/), [OFTC](https://www.oftc.net/), [SlashNet](http://www.slashnet.org/), and [SnooNet](https://snoonet.org/). I usually respond within a few hours of being highlighted.
 
-I will generally try and write in a `-h` or `--help` flag as well, that you can run scripts with to see what options they have.
+## Scripts
 
-Scripts here include:
+Below is a list of scripts available in this repository, along with their descriptions, requirements, and installation instructions.
 
----
+These scripts will generally work by sourcing the "Config" options to a `.env` file with the same base file name, and kept in the same directory.
 
-| `captive-dns.bash` |
-| :---: |
-| A script meant for the UniFi Dream Machine line, which can be used to force DNS to a specific DNS server. This can be useful to force devices which ignore the DNS server handed out by DHCP to use the DNS server of your choice, such as a Google Home. The script will run every minute to ensure your configured DNS server is actually working, and switch to backup option(s) if it is not. |
-| Link to Script: [captive-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/captive-dns.bash) |
-| Link to `.env` File: [captive-dns.env](https://github.com/goose-ws/bash-scripts/blob/main/captive-dns.env.example) |
+So for example, if you want to use the `captive-dns.bash` script, you will need to place `captive-dns.env` in the same directory next to it.
 
----
+The config file names are dynamic to the script file name. So if you wanted to rename `captive-dns.bash` to `force-dns.bash`, then your config file would need to be `force-dns.env` in the same directory.
 
-| `linode-dynamic-dns.bash` |
-| :---: |
-| A script meant to update a dynamic IP address via Linode's DNS manager. |
-| Link to Script: [linode-dynamic-dns.bash](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.bash) |
-| Link to `.env` File: [linode-dynamic-dns.env](https://github.com/goose-ws/bash-scripts/blob/main/linode-dynamic-dns.env.example) |
+## Dependencies
 
----
+While the dependencies vary for each script, many depend on [Mike Farah's 'yq'](https://github.com/mikefarah/yq). While `jq` is great for json, I've found `yq` to better suit my needs, as it allows me to parse XML in the same way. There are some that still use `jq` as I wrote them before switching to `yq` -- I am likely to edit them in the future to depend on `yq` instead.
 
-<<<<<<< HEAD
-| `plex-dlp-mirror.bash` |
-| :---: |
-| A script that mirrors content to Plex, powered by yt-dlp under the hood. Requires [yq](https://github.com/mikefarah/yq). |
-| Link to Script: [plex-dlp-mirror.bash](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.bash) |
-| Link to `.env` File: [plex-dlp-mirror.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.env.example) |
-| Link to Source `.env` File: [00 - Sample.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-dlp-mirror.sources/00%20-%20Sample.env.example) |
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contributing
+I welcome any discussion and pull requests, as outlined above. I wrote these scripts for myself, but I'm sharing them with the world, as perhaps they can be useful to others in the same way that they've been useful to me. Scripts in this repository will always be freely available.
+
+If you happen to find these scripts particularly helpful and have a few bucks to spare, you can [buy me a drink](https://github.com/sponsors/goose-ws)! No pressure at all, but any support is greatly appreciated!
 
 ---
 
-=======
->>>>>>> testing
-| `plex-update-tba.bash` |
-| :---: |
-| A script meant to find media files with the name "TBA" or "TBD" on your Plex Media Server, and issue the necessary commands to refresh their metadata. Requires [yq](https://github.com/mikefarah/yq). |
-| Link to Script: [plex-update-tba.bash](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.bash) |
-| Link to `.env` File: [plex-update-tba.env](https://github.com/goose-ws/bash-scripts/blob/main/plex-update-tba.env.example) |
+### Captive DNS (`captive-dns.bash`)
+
+* **Purpose**: Manages captive DNS on a UDM Pro, forcing all clients to use a specific DNS server via iptables. This is particularly useful for ensuring devices with hard-coded DNS (like Google Home) use your PiHole.
+* **Requirements**:
+    * UDM Pro running Unifi v2.4+ (Debian-based)
+    * BoostChicken's [on-boot.d](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x)
+    * Dependencies: `awk`, `curl`, `date`, `grep`, `host`, `md5sum`, `iptables`, `sort`
+* **Installation**:
+    1.  Ensure BoostChicken's on-boot functionality is installed.
+    2.  Place the script at `/data/scripts/captive-dns.bash` on your UDM Pro.
+    3.  Make the script executable: `chmod +x /data/scripts/captive-dns.bash`.
+    4.  Copy `captive-dns.env.example` to `captive-dns.env` in the same directory and customize it.
+    5.  Run `/data/scripts/captive-dns.bash --install` to set up cron and on-boot execution.
+* **Features**:
+    * Forces DNS via iptables NAT prerouting rules.
+    * Automatic failover to primary, secondary, or tertiary DNS servers based on availability tests.
+    * Telegram notifications for DNS status changes and errors.
+    * Self-update capability (`-u` or `--update`).
+    * Manages a lockfile to prevent concurrent execution.
 
 ---
 
-| `sonarr-group-notifications.bash` |
-| :---: |
-| ~~A script meant to group Sonarr import notifications if a bunch of the same series item are in the queue. This is meant to send one big notification of all items for that series, rather than getting spammed with a thousand individual notifications.~~ **This script is currently undergoing a total rewrite, and will be available again...soon™** |
+### Linode Dynamic DNS (`linode-dynamic-dns.bash`)
+
+* **Purpose**: Updates a DNS record in Linode's DNS manager, primarily for keeping a dynamic DNS record current.
+* **Requirements**:
+    * Dependencies: `awk`, `curl`, `md5sum`
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file.
+    2.  Rename `linode-dynamic-dns.env.example` to `linode-dynamic-dns.env` and customize it with your Linode API key and domain/record details.
+    3.  Set the script to run on a cron job at your desired interval.
+* **Features**:
+    * Updates IPv4 (A records) and IPv6 (AAAA records).
+    * Checks current IP against Linode's record before updating.
+    * Telegram notifications for successful updates or errors.
+    * Self-update capability (`-u` or `--update`).
+    * Manages a lockfile to prevent concurrent execution.
 
 ---
 
-| `sonarr-update-tba.bash` |
-| :---: |
-| A script meant to find media files with the name "TBA" or "TBD" in your Sonarr library, and issue the necessary commands to Sonarr to attempt to rename those files. |
-| Link to Script: [sonarr-update-tba.bash](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.bash) |
-| Link to `.env` File: [sonarr-update-tba.env](https://github.com/goose-ws/bash-scripts/blob/main/sonarr-update-tba.env.example) |
+### Plex Update TBA (`plex-update-tba.bash`)
+
+* **Purpose**: Searches your Plex Media Server for media items (episodes) titled "TBA" or "TBD" and attempts to refresh their metadata to get the correct titles.
+* **Requirements**:
+    * Dependencies: `awk`, `curl`, `md5sum`, `yq`
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file.
+    2.  Rename `plex-update-tba.env.example` to `plex-update-tba.env` and customize it with your Plex server details.
+    3.  Set the script to run via a cron job (e.g., hourly).
+* **Features**:
+    * Identifies episodes with "TBA" or "TBD" titles in your Plex library.
+    * Refreshes metadata for identified items to attempt to update titles.
+    * Telegram and Discord notifications for renamed items or errors.
+    * Self-update capability (`-u` or `--update`).
+    * Allows ignoring specific Plex libraries, series, seasons, or episodes via the `.env` file.
+    * Manages a lockfile to prevent concurrent execution.
 
 ---
 
-| `update-plex-in-docker.bash` |
-| :---: |
-| The Plex Media Server docker container installs the latest version within the container, each time it is started. Therefore, we cannot install PMS updates simply by waiting for a new version of the container. Rather, we must restart the container when an update is available. This script automates that process, with some sanity checks to make sure no one is watching anything first. |
-| Link to Script: [update-plex-in-docker.bash](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.bash) |
-| Link to `.env` File: [update-plex-in-docker.env](https://github.com/goose-ws/bash-scripts/blob/main/update-plex-in-docker.env.example) |
+### Sonarr Group Notifications (`sonarr-group-notifications.bash`)
+
+**This script is currently undergoing a total rewrite, and will be available again...soon™**
+
+* ~~**Purpose**: Groups "On Import" notifications from Sonarr to send a single, consolidated message if multiple episodes of a series are imported around the same time, instead of one notification per episode.~~  
+* ~~**Requirements**:~~  
+    ~~* Dependencies: `awk`, `curl`, `jq`, `md5sum`, `sort`. `docker` if Sonarr is in Docker and script is outside.~~  
+* ~~**Installation**:~~  
+    ~~1.  Download the `.bash` script and the `.env.example` file.~~  
+    ~~2.  Rename `sonarr-group-notifications.env.example` to `sonarr-group-notifications.env` and customize it.~~  
+    ~~3.  If using Docker, place script and `.env` in a persistently mounted directory (e.g., `/config/`).~~  
+    ~~4.  Make the script executable (`chmod +x`) and ensure it's owned by the user/group Sonarr runs as.~~  
+    ~~5.  In Sonarr: Settings > Connect > Add Connection (+ Custom Script).~~  
+        ~~* Name: Your choice (e.g., Grouped Telegram Notifications).~~  
+        ~~* Notification Triggers: Check "On Import" ONLY.~~  
+        ~~* Path: Absolute path to `sonarr-group-notifications.bash` (e.g., `/config/sonarr-group-notifications.bash` if in Docker).~~  
+        ~~* Test and Save.~~  
+* ~~**Features**:~~  
+    ~~* Consolidates notifications for multiple episodes from the same series imported close together.~~  
+    ~~* Uses Sonarr's v3 API.~~  
+    ~~* Telegram notifications.~~  
+    ~~* Self-update capability (`-u` or `--update`).~~  
+    ~~* Manages a lockfile using PIDs to ensure sequential processing of notifications.~~  
+
+---
+
+### Sonarr Update TBA (`sonarr-update-tba.bash`)
+
+* **Purpose**: Checks your Sonarr library for files that were imported with "TBA" titles and attempts to rename them by refreshing metadata once the actual episode titles are available. This script is intended to run on the host system, interacting with Sonarr running in Docker.
+* **Requirements**:
+    * Docker (if Sonarr is Dockerized)
+    * Dependencies: `awk`, `curl`, `docker`, `jq`, `md5sum`
+    * Sonarr setting "Episode Title Requires" should be set to "Only for Bulk Season Releases" or "Never" to allow importing TBA titled episodes.
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file to your host system.
+    2.  Rename `sonarr-update-tba.env.example` to `sonarr-update-tba.env` and customize it with your Sonarr details.
+    3.  Set the script to run via a cron job (e.g., hourly).
+* **Features**:
+    * Identifies files with "TBA" or "TBD" in their names within Sonarr's library paths.
+    * Triggers a series refresh and then a rename command in Sonarr for the affected series/episodes.
+    * Telegram and Discord notifications for renamed items or errors.
+    * Self-update capability (`-u` or `--update`).
+    * Supports multiple Sonarr instances if they are Docker-based; single host-based instance also supported.
+    * Ignore lists for libraries, series, and episodes.
+    * Manages a lockfile to prevent concurrent execution.
+
+---
+
+### Unifi Client Monitor (`unifi_client_monitor.bash`)
+
+* **Purpose**: Monitors `/var/log/daemon.log` on a Unifi device (likely a UDM) for DHCPACK entries, logs new client connections to an SQLite database, and sends Telegram notifications for newly seen clients or MAC addresses.
+* **Requirements**:
+    * `yq` (will attempt to download if missing)
+    * `sqlite3` (will attempt to `apt install` if missing)
+    * Dependencies: `curl`, `date`, `sqlite3`, `yq`
+* **Installation**:
+    1.  Download the `.bash` script and `unifi_client_monitor.env.example`.
+    2.  Rename `unifi_client_monitor.env.example` to `unifi_client_monitor.env` and customize with Telegram bot details and local DNS server IP.
+    3.  Place both files in a suitable directory on your Unifi device.
+    4.  Make the script executable: `chmod +x unifi_client_monitor.bash`.
+    5.  Run the script; it will background itself to continuously monitor the log. Consider using [on-boot.d](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) for persistance.
+* **Features**:
+    * Continuously monitors `/var/log/daemon.log` for new DHCP leases.
+    * Logs new client details (VLAN, MAC, IP, Name from DHCP, Timestamp) to an SQLite database (`.unifi_client_monitor.db`).
+    * Sends a Telegram notification when a new client (or a known MAC with a new IP/VLAN) is detected.
+    * Checks against a local DNS server for a hostname associated with the new IP address.
+    * Indicates if the MAC address has been seen before.
+    * Manages a lockfile to prevent concurrent execution of the main script (the monitoring part runs in the background).
+
+---
+
+### Update Plex in Docker (`update-plex-in-docker.bash`)
+
+* **Purpose**: Automates the update process for official Plex Media Server Docker containers. It checks the currently running version against the latest available from Plex.tv and, if an update is found and no one is actively using Plex, restarts the container to apply the update.
+* **Requirements**:
+    * Docker
+    * Dependencies: `awk`, `curl`, `docker`, `jq`, `md5sum`, `xmllint`
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file to your Docker host.
+    2.  Rename `update-plex-in-docker.env.example` to `update-plex-in-docker.env` and customize with your Plex container name, access token, and other preferences.
+    3.  Set the script to run via a cron job (e.g., hourly).
+* **Features**:
+    * Fetches the latest Plex version information from plex.tv.
+    * Compares installed version with the latest available for the specified channel (plexpass, beta, public).
+    * Checks for active Plex sessions and only proceeds with an update if the server is idle.
+    * Optional database repair using ChuckPA's DBRepair.sh.
+    * Clears the Plex Codecs directory before restarting to prevent potential issues.
+    * Restarts the specified Plex Docker container to apply the update.
+    * Telegram and Discord notifications for updates and errors.
+    * Self-update capability (`-u` or `--Update`).
+    * Manages a lockfile to prevent concurrent execution.
+
+---
+
+### YouTube to Podcast (`youtube_to_podcast.bash`)
+
+* **Purpose**: Converts a YouTube playlist or channel into a podcast RSS feed, downloading audio using `yt-dlp` and generating the necessary XML.
+* **Requirements**:
+    * Dependencies: `awk`, `curl`, `date`, `ffprobe`, `md5sum`, `mimetype`, `qrencode`, `sha256sum`, `shuf`, `sqlite3`, `stat`, `xmllint`, `yq`, `yt-dlp`
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file.
+    2.  Rename `youtube_to_podcast.env.example` to `youtube_to_podcast.env` and customize it with your YouTube API key, source URL, and desired podcast details.
+    3.  Set the script to run via a cron job (e.g., hourly).
+* **Features**:
+    * Downloads audio from YouTube videos in a specified playlist or channel.
+    * Generates a valid RSS feed (`feed.xml`) for use in podcast players.
+    * Stores video metadata, download status, and file paths in an SQLite database (`.youtube_to_podcast.bash.db`).
+    * Optional SponsorBlock integration to remove sponsored segments from downloaded audio.
+    * Manages a configurable number of recent episodes to keep (`keepLimit`).
+    * Extracts metadata such as titles, descriptions, and thumbnails from YouTube.
+    * Calculates episode duration and file sizes for the RSS feed.
+    * Telegram notifications for errors or successful runs.
+    * Self-update capability (`-u` or `--update`).
+    * Generates a QR code for the podcast feed URL on initial database setup if `qrencode` is available.
+    * Manages a lockfile to prevent concurrent execution.
 
 ---
 
