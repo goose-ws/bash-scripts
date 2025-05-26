@@ -1,5 +1,23 @@
 # Bash Script Collection
 
+## Table of Contents
+- [About](#about)
+- [Scripts](#scripts)
+- [Dependencies](#dependencies)
+- [License](#license)
+- [Contributing](#contributing)
+- [Captive DNS (`captive-dns.bash`)](#captive-dns-captive-dnsbash)
+- [Linode Dynamic DNS (`linode-dynamic-dns.bash`)](#linode-dynamic-dns-linode-dynamic-dnsbash)
+- [Plex DLP Mirror (`plex-dlp-mirror.bash`)](#plex-dlp-mirror-plex-dlp-mirrorbash)
+- [Plex Update TBA (`plex-update-tba.bash`)](#plex-update-tba-plex-update-tbabash)
+- [Sonarr Group Notifications (`sonarr-group-notifications.bash`)](#sonarr-group-notifications-sonarr-group-notificationsbash)
+- [Sonarr Update TBA (`sonarr-update-tba.bash`)](#sonarr-update-tba-sonarr-update-tbabash)
+- [Unifi Client Monitor (`unifi_client_monitor.bash`)](#unifi-client-monitor-unifi_client_monitorbash)
+- [Update Plex in Docker (`update-plex-in-docker.bash`)](#update-plex-in-docker-update-plex-in-dockerbash)
+- [YouTube to Podcast (`youtube_to_podcast.bash`)](#youtube-to-podcast-youtube_to_podcastbash)
+- [Todo](#todo)
+- [Done ✓](#done-)
+
 ## About
 
 This repository contains a collection of Bash scripts designed for various automation and utility tasks. These scripts are primarily passion projects. I have a moderate amount of skill in bash. I am certainly no expert, but I am no novice either. There are likely better ways to execute the flow of logic I am trying to achieve in these scripts! If you have a suggestion, I would welcome a pull request. All scripts require **Bash version 4 or greater** to run.
