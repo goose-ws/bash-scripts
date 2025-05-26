@@ -5,11 +5,13 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     exit 255
 fi
 
+# Ensure we have 'yq'
 if ! [ -e "/usr/bin/yq" ]; then
     wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64 -O /usr/bin/yq
     chmod +x /usr/bin/yq
 fi
 
+# Ensure we have sqlite3
 if ! [ -e "/usr/bin/sqlite3" ]; then
     apt install sqlite3 -y
 fi
@@ -36,10 +38,7 @@ if [[ "${depFail}" -eq "1" ]]; then
 fi
 
 # Define some external variables
-telegramBotId="6464203996:AAHjbdf3YZzT5uXySqYSlVr8xoylcymzNfs"
-telegramChannelId="-1001317880548"
-localDNS="10.10.10.10"
-outputVerbosity="4"
+source "${0%bash}env"
 
 # Define some internal variables
 scriptName="${0##*/}"
