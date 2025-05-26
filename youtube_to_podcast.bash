@@ -346,13 +346,15 @@ echo "${encoded}"
 }
 
 function html_encode {
-    local input
-    input="${1}"
-    input="${input//&/&amp;}"  # Encode &
-    input="${input//</&lt;}"    # Encode <
-    input="${input//>/&gt;}"    # Encode >
-    input="${input//\"/&quot;}"  # Encode "
-    input="${input//\'/&apos;}"  # Encode '
+    local input="${1}"
+    # Order is important: & must be encoded first.
+    input="${input//&/&amp;}"
+    input="${input//</&lt;}"
+    input="${input//>/&gt;}"
+    input="${input//\"/&quot;}"
+    input="${input//\'/&apos;}" # or &#39;
+    input="${input//“/&ldquo;}" # Left double quote
+    input="${input//”/&rdquo;}" # Right double quote
     echo "${input}"
 }
 
@@ -1407,6 +1409,7 @@ printOutput "3" "################# Generating XML feed #################"
         arrStr="${arrStr}$(printf "\r\n")<itunes:title>$(html_encode "${episodeTitle}")</itunes:title>"
         arrStr="${arrStr}$(printf "\r\n")<itunes:author>$(html_encode "${podcastArtist}")</itunes:author>"
         arrStr="${arrStr}$(printf "\r\n")<itunes:image href=\"${podcastBaseUrl%/}/$(rawurlencode "${episodeImage}")\" />"
+        arrStr="${arrStr}$(printf "\r\n")<media:thumbnail url=\"${podcastBaseUrl%/}/$(rawurlencode "${episodeImage}")\" />"
         arrStr="${arrStr}$(printf "\r\n")<itunes:duration>${episodeDuration}</itunes:duration>"
         arrStr="${arrStr}$(printf "\r\n")<itunes:explicit>${podcastExplicit}</itunes:explicit>"
         arrStr="${arrStr}$(printf "\r\n")<itunes:episodeType>full</itunes:episodeType>"
