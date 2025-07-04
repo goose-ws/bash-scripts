@@ -348,13 +348,13 @@ echo "${encoded}"
 function html_encode {
     local input="${1}"
     # Order is important: & must be encoded first.
-    input="${input//&/&amp;}"
-    input="${input//</&lt;}"
-    input="${input//>/&gt;}"
-    input="${input//\"/&quot;}"
-    input="${input//\'/&apos;}" # or &#39;
-    input="${input//“/&ldquo;}" # Left double quote
-    input="${input//”/&rdquo;}" # Right double quote
+    input="${input//&/\&amp;}"
+    input="${input//</\&lt;}"
+    input="${input//>/\&gt;}"
+    input="${input//\"/\&quot;}"
+    input="${input//\'/\&apos;}" # or &#39;
+    input="${input//“/\&quot;}" # Left double quote
+    input="${input//”/\&quot;}" # Right double quote
     echo "${input}"
 }
 

@@ -2156,7 +2156,7 @@ if ! ytApiCall "captions?part=snippet&videoId=${1}"; then
     return 1
 fi
 
-subStatus="$(sqDb "SELECT INT_ID FROM subtitle WHERE FILE_ = '${1//\'/\'\'}' AND LANG_CODE = 'No subs available';")"
+subStatus="$(sqDb "SELECT INT_ID FROM subtitle WHERE FILE_ID = '${1//\'/\'\'}' AND LANG_CODE = 'No subs available';")"
 if [[ "$(yq ".items | length" <<<"${curlOutput}")" -eq "0" ]]; then
     printOutput "3" "No subtitle tracks available for file ID [${1}]"
     # Update or insert subtitle version in the database
@@ -2169,11 +2169,15 @@ if [[ "$(yq ".items | length" <<<"${curlOutput}")" -eq "0" ]]; then
     fi
     return 0
 elif [[ -n "${subStatus}" ]]; then
-    # Remove the old record, we now have subs
-    if sqDb "DELETE FROM playlist_order WHERE INT_ID = ${subStatus};"; then
-        printOutput "5" "Removed stale record of no subtitles available for file ID [${1}]"
+    if [[ "${subStatus}" =~ ^[0-9]+$ ]]; then
+        # Remove the old record, we now have subs
+        if sqDb "DELETE FROM playlist_order WHERE INT_ID = ${subStatus};"; then
+            printOutput "5" "Removed stale record of no subtitles available for file ID [${1}]"
+        else
+            printOutput "1" "Failed to remove stale record with INT_ID [${subStatus}] of no subtitles available for file ID [${1}]"
+        fi
     else
-        printOutput "1" "Failed to remove stale record with INT_ID [${subStatus}] of no subtitles available for file ID [${1}]"
+        badExit "43" "Bad INT_ID [${subStatus}] for file ID [${1}]"
     fi
 fi
 
@@ -2291,7 +2295,7 @@ for i in "${!captionIds[@]}"; do
     else
         if [[ "${dlpOutput[-1]}" == "[info] There are no subtitles for the requested languages" ]]; then
             # No subs available
-            subStatus="$(sqDb "SELECT INT_ID FROM subtitle WHERE FILE_ = '${1//\'/\'\'}' AND LANG_CODE = 'No subs available';")"
+            subStatus="$(sqDb "SELECT INT_ID FROM subtitle WHERE FILE_ID = '${1//\'/\'\'}' AND LANG_CODE = 'No subs available';")"
             # Update or insert subtitle version in the database
             if [[ -z "${subStatus}" ]]; then
                 # Insert new subtitle version
@@ -2640,7 +2644,7 @@ if [[ "${2}" =~ ^[0-9]{4}$ ]]; then
     # Add the season folder, if required
     if ! [[ -d "${outputDir}/${channelPath}/Season ${year}" ]]; then
         if ! mkdir -p "${outputDir}/${channelPath}/Season ${year}"; then
-            badExit "43" "Unable to create season folder [${outputDir}/${channelPath}/Season ${year}]"
+            badExit "44" "Unable to create season folder [${outputDir}/${channelPath}/Season ${year}]"
         fi
     fi
     # Create the image
@@ -2688,7 +2692,7 @@ if [[ -e "${outputDir}/${channelPath}/show.jpg" ]]; then
             # Add the season folder, if required
             if ! [[ -d "${outputDir}/${channelPath}/Season ${year}" ]]; then
                 if ! mkdir -p "${outputDir}/${channelPath}/Season ${year}"; then
-                    badExit "44" "Unable to create season folder [${outputDir}/${channelPath}/Season ${year}]"
+                    badExit "45" "Unable to create season folder [${outputDir}/${channelPath}/Season ${year}]"
                 fi
             fi
             # Create the image
@@ -2792,7 +2796,7 @@ elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
     printOutput "1" "Data [${apiResults}] failed to validate as an integer"
     return 1
 else
-    badExit "45" "Impossible condition"
+    badExit "46" "Impossible condition"
 fi
 
 if [[ "${apiResults}" -eq "0" ]]; then
@@ -2959,21 +2963,21 @@ if [[ "${dbCount}" -eq "0" ]]; then
     if sqDb "INSERT INTO channel (CHANNEL_ID, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', '$(date)', '$(date)');"; then
         printOutput "3" "Added channel ID [${1}] to database"
     else
-        badExit "46" "Adding channel ID [${1}] to database failed"
+        badExit "47" "Adding channel ID [${1}] to database failed"
     fi
 elif [[ "${dbCount}" -eq "1" ]]; then
     # Exists as a safety check
     true
 else
     # PANIC
-    badExit "47" "Multiple matches found for channel ID [${1}] -- Possible database corruption"
+    badExit "48" "Multiple matches found for channel ID [${1}] -- Possible database corruption"
 fi
 
 # Set the channel name
 if sqDb "UPDATE channel SET NAME = '${chanName//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated channel name [${chanName}] for channel ID [${1}] in database"
 else
-    badExit "48" "Updating channel name [${chanName}] for channel ID [${1}] in database failed"
+    badExit "49" "Updating channel name [${chanName}] for channel ID [${1}] in database failed"
 fi
 
 
@@ -2981,70 +2985,70 @@ fi
 if sqDb "UPDATE channel SET NAME_SAFE = '${channelNameClean//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated channel clean name [${channelNameClean}] for channel ID [${1}] in database"
 else
-    badExit "49" "Updating channel clean name [${channelNameClean}] for channel ID [${1}] in database failed"
+    badExit "50" "Updating channel clean name [${channelNameClean}] for channel ID [${1}] in database failed"
 fi
 
 # Set the timestamp
 if sqDb "UPDATE channel SET TIMESTAMP = ${chanEpochDate}, UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated timestamp [${chanEpochDate}] for channel ID [${1}] in database"
 else
-    badExit "50" "Updating timestamp [${chanEpochDate}] for channel ID [${1}] in database failed"
+    badExit "51" "Updating timestamp [${chanEpochDate}] for channel ID [${1}] in database failed"
 fi
 
 # Set the subscriber count
 if sqDb "UPDATE channel SET SUB_COUNT = ${chanSubs//,/}, UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated subscriber count [${chanSubs}] for channel ID [${1}] in database"
 else
-    badExit "51" "Updating subscriber count [${chanSubs}] for channel ID [${1}] in database failed"
+    badExit "52" "Updating subscriber count [${chanSubs}] for channel ID [${1}] in database failed"
 fi
 
 # Set the channel country
 if sqDb "UPDATE channel SET COUNTRY = '${chanCountry//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated country [${chanCountry}] for channel ID [${1}] in database"
 else
-    badExit "52" "Updating country [${chanCountry}] for channel ID [${1}] in database failed"
+    badExit "53" "Updating country [${chanCountry}] for channel ID [${1}] in database failed"
 fi
 
 # Set the channel URL
 if sqDb "UPDATE channel SET URL = '${chanUrl//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated URL [${chanUrl}] for channel ID [${1}] in database"
 else
-    badExit "53" "Updating URL [${chanUrl}] for channel ID [${1}] in database failed"
+    badExit "54" "Updating URL [${chanUrl}] for channel ID [${1}] in database failed"
 fi
 
 # Set the video count
 if sqDb "UPDATE channel SET VID_COUNT = ${chanVids//,/}, UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated video count [${chanVids}] for channel ID [${1}] in database"
 else
-    badExit "54" "Updating video count [${chanVids}] for channel ID [${1}] in database failed"
+    badExit "55" "Updating video count [${chanVids}] for channel ID [${1}] in database failed"
 fi
 
 # Set the view count
 if sqDb "UPDATE channel SET VIEW_COUNT = ${chanViews//,/}, UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated view count [${chanViews}] for channel ID [${1}] in database"
 else
-    badExit "55" "Updating view count [${chanViews}] for channel ID [${1}] in database failed"
+    badExit "56" "Updating view count [${chanViews}] for channel ID [${1}] in database failed"
 fi
 
 # Set the channel description
 if sqDb "UPDATE channel SET DESC = '${chanDesc//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated channel description [${#chanDesc} characters] for channel ID [${1}] in database"
 else
-    badExit "56" "Updating channel description [${#chanDesc} characters] for channel ID [${1}] in database failed"
+    badExit "57" "Updating channel description [${#chanDesc} characters] for channel ID [${1}] in database failed"
 fi
 
 # Set the channel path
 if sqDb "UPDATE channel SET PATH = '${channelPathClean//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated channel path [${channelPathClean}] for channel ID [${1}] in database"
 else
-    badExit "57" "Updating channel path [${channelPathClean}] for channel ID [${1}] in database failed"
+    badExit "58" "Updating channel path [${channelPathClean}] for channel ID [${1}] in database failed"
 fi
 
 # Set the channel image
 if sqDb "UPDATE channel SET IMAGE = '${chanImage//\'/\'\'}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
     printOutput "5" "Updated channel image [${chanImage}] for channel ID [${1}] in database"
 else
-    badExit "58" "Updating channel image [${chanImage}] for channel ID [${1}] in database failed"
+    badExit "59" "Updating channel image [${chanImage}] for channel ID [${1}] in database failed"
 fi
 
 # If we have a channel banner, add that
@@ -3052,7 +3056,7 @@ if [[ -n "${chanBanner}" && ! "${chanBanner}" == "null" ]]; then
     if sqDb "UPDATE channel SET BANNER = '${chanBanner}' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
         printOutput "5" "Updated channel banner [${chanBanner}] to database entry for channel ID [${1}]"
     else
-        badExit "59" "Unable to append channel banner to database entry for channel ID [${1}]"
+        badExit "60" "Unable to append channel banner to database entry for channel ID [${1}]"
     fi
 fi
 }
@@ -3078,7 +3082,7 @@ elif ! [[ "${apiResults}" =~ ^[0-9]+$ ]]; then
     printOutput "1" "Data [${apiResults}] failed to validate as an integer"
     return 1
 else
-    badExit "60" "Impossible condition"
+    badExit "61" "Impossible condition"
 fi
 
 if [[ "${apiResults}" -eq "0" ]]; then
@@ -3110,7 +3114,7 @@ elif [[ "${apiResults}" -eq "1" ]]; then
     plDesc="$(yq -p json ".items[0].snippet.description" <<<"${curlOutput}")"
     plImage="$(yq -p json ".items[0].snippet.thumbnails | to_entries | sort_by(.value.height) | reverse | .0 | .value.url" <<<"${curlOutput}")"
 else
-    badExit "61" "Impossible condition"
+    badExit "62" "Impossible condition"
 fi
 
 if [[ -z "${plTitle}" ]]; then
@@ -3147,13 +3151,13 @@ if [[ "${dbCount}" -eq "0" ]]; then
     if sqDb "INSERT INTO playlist (PLAYLIST_ID, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', '$(date)', '$(date)');"; then
         printOutput "3" "Added playlist ID [${1}] to database"
     else
-        badExit "62" "Failed to add playlist ID [${1}] to database"
+        badExit "63" "Failed to add playlist ID [${1}] to database"
     fi
 elif [[ "${dbCount}" -eq "1" ]]; then
     # Safety check
     true
 else
-    badExit "63" "Counted [${dbCount}] instances of playlist ID [${1}] in database -- Possible database corruption"
+    badExit "64" "Counted [${dbCount}] instances of playlist ID [${1}] in database -- Possible database corruption"
 fi
 
 # Update the visibility
@@ -3259,11 +3263,11 @@ if [[ -z "${verifiedArr["${1}"]}" ]]; then
             # Move the video and thumbail of each video in the base directory
             # Check if the base channel directory exists
             if [[ -d "${outputDir}/${channelPath}" ]]; then
-                badExit "64" "Directory [${outputDir}/${channelPath}] already exists, unable to update [${outputDir}/${tmpChannelPath}]"
+                badExit "65" "Directory [${outputDir}/${channelPath}] already exists, unable to update [${outputDir}/${tmpChannelPath}]"
             else
                 # Move it
                 if ! mv "${outputDir}/${tmpChannelPath}" "${outputDir}/${channelPath}"; then
-                    badExit "65" "Failed to move old directory [${outputDir}/${tmpChannelPath}] to new directory [${outputDir}/${channelPath}]"
+                    badExit "66" "Failed to move old directory [${outputDir}/${tmpChannelPath}] to new directory [${outputDir}/${channelPath}]"
                 fi
                 # Create the series image - This will also re-create season images if needed
                 makeShowImage "${1}"
@@ -3283,7 +3287,7 @@ if [[ -z "${verifiedArr["${1}"]}" ]]; then
                 if ! [[ -d "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}" ]]; then
                     # Create it
                     if ! mkdir -p "${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}"; then
-                        badExit "66" "Unable to create directory [${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}]"
+                        badExit "67" "Unable to create directory [${outputDir}/${tmpChannelPath}/Season ${tmpVidYear}]"
                     fi
                 fi
 
@@ -3353,7 +3357,7 @@ if [[ -z "${verifiedArr["${1}"]}" ]]; then
         fi
         verifiedArr["${1}"]="true"
     else
-        badExit "67" "Counted [${dbCount}] instances of channel ID [${1}] -- Possible database corruption"
+        badExit "68" "Counted [${dbCount}] instances of channel ID [${1}] -- Possible database corruption"
     fi
 fi
 }
@@ -3440,7 +3444,7 @@ fi
 lookupTime="$(($(date +%s%N)/1000000))"
 # Channel ID should be passed as ${1}
 if [[ -z "${1}" ]]; then
-    badExit "68" "No channel ID passed for series rating key update"
+    badExit "69" "No channel ID passed for series rating key update"
 fi
 chanName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${1//\'/\'\'}';")"
 printOutput "3" "Retrieving rating key from Plex for show [${chanName}] with channel ID [${1}]"
@@ -3468,15 +3472,15 @@ if [[ -n "${ratingKeyArr[${chanName,,}]}" ]]; then
         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, VIDEO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, '$(date)', '$(date)');"; then
             printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
         else
-            badExit "69" "Added series rating key [${showRatingKey}] to database failed"
+            badExit "70" "Added series rating key [${showRatingKey}] to database failed"
         fi
     elif [[ "${dbCount}" -eq "1" ]]; then
         # Exists, update it
         if ! sqDb "UPDATE rating_key_channel SET VIDEO_RATING_KEY = '${showRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-            badExit "70" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+            badExit "71" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
         fi
     else
-        badExit "71" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+        badExit "72" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
     fi
     lookupMatch="1"
 else
@@ -3504,7 +3508,7 @@ else
                 printOutput "1" "Data [${showRatingKey}] failed to validate as an integer"
                 return 1
             else
-                badExit "72" "Impossible condition"
+                badExit "73" "Impossible condition"
             fi
 
             # Get the rating key of a season that matches our video year
@@ -3522,7 +3526,7 @@ else
                 printOutput "1" "Data [${seasonRatingKey}] failed to validate as an integer"
                 return 1
             else
-                badExit "73" "Impossible condition"
+                badExit "74" "Impossible condition"
             fi
 
             if [[ -n "${seasonRatingKey}" ]]; then
@@ -3533,7 +3537,7 @@ else
                 firstEpisodeId="${firstEpisodeId%\]\.*}"
                 firstEpisodeId="${firstEpisodeId##*\[}"
                 if [[ -z "${firstEpisodeId}" ]]; then
-                    badExit "74" "Failed to isolate ID for first episode of [${plexTitleArr[${z}]}] season [${firstYear}] -- Incorrect file name scheme?"
+                    badExit "75" "Failed to isolate ID for first episode of [${plexTitleArr[${z}]}] season [${firstYear}] -- Incorrect file name scheme?"
                 fi
                 # We have now extracted the ID of the first episode of the first season. Compare it to ours, and hope for a match.
                 if [[ "${firstEpisodeId}" == "${firstEpisode}" ]]; then
@@ -3547,15 +3551,15 @@ else
                         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, VIDEO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, '$(date)', '$(date)');"; then
                             printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
                         else
-                            badExit "75" "Added series rating key [${showRatingKey}] to database failed"
+                            badExit "76" "Added series rating key [${showRatingKey}] to database failed"
                         fi
                     elif [[ "${dbCount}" -eq "1" ]]; then
                         # Exists, update it
                         if ! sqDb "UPDATE rating_key_channel SET VIDEO_RATING_KEY = '${showRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-                            badExit "76" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+                            badExit "77" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
                         fi
                     else
-                        badExit "77" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                        badExit "78" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
                     fi
                     lookupMatch="1"
 
@@ -3594,15 +3598,15 @@ else
                         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, VIDEO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${showRatingKey}, '$(date)', '$(date)');"; then
                             printOutput "5" "Added rating key [${showRatingKey}] for channel ID [${1}] to database"
                         else
-                            badExit "78" "Added series rating key [${showRatingKey}] to database failed"
+                            badExit "79" "Added series rating key [${showRatingKey}] to database failed"
                         fi
                     elif [[ "${dbCount}" -eq "1" ]]; then
                         # Exists, update it
                         if ! sqDb "UPDATE rating_key_channel SET VIDEO_RATING_KEY = '${showRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-                            badExit "79" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
+                            badExit "80" "Failed to update series rating key [${showRatingKey}] for channel ID [${channelId}]"
                         fi
                     else
-                        badExit "80" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                        badExit "81" "Database count for series rating key [${showRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
                     fi
                     lookupMatch="1"
 
@@ -3672,7 +3676,7 @@ elif ! [[ "${showCreation}" =~ ^[0-9]+$ ]]; then
     printOutput "1" "Data [${showCreation}] failed to validate as an integer"
     return 1
 else
-    badExit "81" "Impossible condition"
+    badExit "82" "Impossible condition"
 fi
 # Convert it to YYYY-MM-DD
 showCreation="$(date --date="@${showCreation}" "+%Y-%m-%d")"
@@ -3693,11 +3697,11 @@ fi
 lookupTime="$(($(date +%s%N)/1000000))"
 # Channel ID should be passed as ${1}
 if [[ -z "${1}" ]]; then
-    badExit "82" "No channel ID passed for artist rating key update"
+    badExit "83" "No channel ID passed for artist rating key update"
 fi
 chanName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${1//\'/\'\'}';")"
 if [[ -z "${chanName}" ]]; then
-    badExit "83" "Unable to retrieve channel name for channel ID [${1}]"
+    badExit "84" "Unable to retrieve channel name for channel ID [${1}]"
 fi
 printOutput "3" "Retrieving rating key from Plex for artist [${chanName}] with channel ID [${1}]"
 # Can we take the easy way out? Try to match the artist by name
@@ -3724,15 +3728,15 @@ if [[ -n "${ratingKeyArr[${chanName,,}]}" ]]; then
         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, AUDIO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${artistRatingKey}, '$(date)', '$(date)');"; then
             printOutput "5" "Added rating key [${artistRatingKey}] for channel ID [${1}] to database"
         else
-            badExit "84" "Added artist rating key [${artistRatingKey}] to database failed"
+            badExit "85" "Added artist rating key [${artistRatingKey}] to database failed"
         fi
     elif [[ "${dbCount}" -eq "1" ]]; then
         # Exists, update it
         if ! sqDb "UPDATE rating_key_channel SET AUDIO_RATING_KEY = '${artistRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-            badExit "85" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
+            badExit "86" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
         fi
     else
-        badExit "86" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+        badExit "87" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
     fi
     lookupMatch="1"
 else
@@ -3767,7 +3771,7 @@ else
                 printOutput "1" "Data [${artistRatingKey}] failed to validate as an integer"
                 return 1
             else
-                badExit "87" "Impossible condition"
+                badExit "88" "Impossible condition"
             fi
 
             # Get the rating key of an album that matches our video year
@@ -3785,7 +3789,7 @@ else
                 printOutput "1" "Data [${albumRatingKey}] failed to validate as an integer"
                 return 1
             else
-                badExit "88" "Impossible condition"
+                badExit "89" "Impossible condition"
             fi
 
             if [[ -n "${albumRatingKey}" ]]; then
@@ -3797,7 +3801,7 @@ else
                 firstAlbumId="${firstAlbumId%\]}"
                 firstAlbumId="${firstAlbumId##*\[}"
                 if [[ -z "${firstAlbumId}" ]]; then
-                    badExit "89" "Failed to isolate ID for first track for album rating key [${albumRatingKey}] -- Incorrect file name scheme?"
+                    badExit "90" "Failed to isolate ID for first track for album rating key [${albumRatingKey}] -- Incorrect file name scheme?"
                 fi
                 # We have now extracted the ID of the first track of the first album. Compare it to ours, and hope for a match.
                 if [[ "${firstAlbumId}" == "${firstTrack}" ]]; then
@@ -3811,15 +3815,15 @@ else
                         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, AUDIO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${artistRatingKey}, '$(date)', '$(date)');"; then
                             printOutput "5" "Added rating key [${artistRatingKey}] for channel ID [${1}] to database"
                         else
-                            badExit "90" "Added artist rating key [${artistRatingKey}] to database failed"
+                            badExit "91" "Added artist rating key [${artistRatingKey}] to database failed"
                         fi
                     elif [[ "${dbCount}" -eq "1" ]]; then
                         # Exists, update it
                         if ! sqDb "UPDATE rating_key_channel SET AUDIO_RATING_KEY = '${artistRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-                            badExit "91" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
+                            badExit "92" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
                         fi
                     else
-                        badExit "92" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                        badExit "93" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
                     fi
                     lookupMatch="1"
 
@@ -3858,15 +3862,15 @@ else
                         if sqDb "INSERT INTO rating_key_channel (CHANNEL_ID, AUDIO_RATING_KEY, CREATED, UPDATED) VALUES ('${1//\'/\'\'}', ${artistRatingKey}, '$(date)', '$(date)');"; then
                             printOutput "5" "Added rating key [${artistRatingKey}] for channel ID [${1}] to database"
                         else
-                            badExit "93" "Added artist rating key [${artistRatingKey}] to database failed"
+                            badExit "94" "Added artist rating key [${artistRatingKey}] to database failed"
                         fi
                     elif [[ "${dbCount}" -eq "1" ]]; then
                         # Exists, update it
                         if ! sqDb "UPDATE rating_key_channel SET AUDIO_RATING_KEY = '${artistRatingKey}', UPDATED = '$(date)' WHERE CHANNEL_ID = '${1//\'/\'\'}';"; then
-                            badExit "94" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
+                            badExit "95" "Failed to update artist rating key [${artistRatingKey}] for channel ID [${channelId}]"
                         fi
                     else
-                        badExit "95" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
+                        badExit "96" "Database count for artist rating key [${artistRatingKey}] in rating_key table returned unexpected output [${dbCount}] -- Possible database corruption"
                     fi
                     lookupMatch="1"
 
@@ -3940,7 +3944,7 @@ elif ! [[ "${artistCreation}" =~ ^[0-9]+$ ]]; then
     printOutput "1" "Data [${artistCreation}] failed to validate as an integer"
     return 1
 else
-    badExit "96" "Impossible condition"
+    badExit "97" "Impossible condition"
 fi
 # Convert it to YYYY-MM-DD
 artistCreation="$(date --date="@${artistCreation}" "+%Y-%m-%d")"
@@ -4062,13 +4066,13 @@ while read -r lookupRatingKey; do
             if sqDb "INSERT INTO rating_key_album (FILE_ID, RATING_KEY, CREATED, UPDATED) VALUES ('${foundFileId//\'/\'\'}', ${lookupRatingKey}, '$(date)', '$(date)');"; then
                 printOutput "5" "Logged audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             else
-                badExit "97" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
+                badExit "98" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             fi
         else
             if sqDb "UPDATE rating_key_album SET RATING_KEY = ${lookupRatingKey}, UPDATED = '$(date)' WHERE FILE_ID = '${foundFileId//\'/\'\'}';"; then
                 printOutput "5" "Updated audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             else
-                badExit "98" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
+                badExit "99" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             fi
         fi
         break
@@ -4081,7 +4085,7 @@ while read -r lookupRatingKey; do
             if sqDb "INSERT INTO rating_key_album (FILE_ID, RATING_KEY, CREATED, UPDATED) VALUES ('${foundFileId//\'/\'\'}', ${lookupRatingKey}, '$(date)', '$(date)');"; then
                 printOutput "5" "Logged audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             else
-                badExit "99" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
+                badExit "100" "Failed to log audio rating key [${lookupRatingKey}] for file ID [${foundFileId}]"
             fi
         fi
     fi
@@ -4200,7 +4204,7 @@ elif [[ "${watchedArr[_${1}]}" =~ ^[0-9]+$ ]]; then
         printOutput "1" "Failed to mark file ID [${1}] as partially watched [${watchedArr[_${1}]}|$(msToTime "${watchedArr[_${1}]}")] via rating key [${ratingKey}]"
     fi
 else
-    badExit "100" "Unexpected watch status for [${1}]: ${watchedArr[_${1}]}"
+    badExit "101" "Unexpected watch status for [${1}]: ${watchedArr[_${1}]}"
 fi
 }
 
@@ -4240,7 +4244,7 @@ fi
 local vidYear
 vidYear="$(sqDb "SELECT UPLOAD_YEAR FROM media WHERE FILE_ID = '${1//\'/\'\'}';")"
 if [[ -z "${vidYear}" ]]; then
-    badExit "101" "Failed to retrieve year for file ID [${1}] -- Possible database corruption"
+    badExit "102" "Failed to retrieve year for file ID [${1}] -- Possible database corruption"
 fi
 
 # Get the rating key for the season matching the year
@@ -4256,7 +4260,7 @@ elif ! [[ "${seasonRatingKey}" =~ ^[0-9]+$ ]]; then
     printOutput "1" "Data [${seasonRatingKey}] failed to validate as an integer"
     return 1
 else
-    badExit "102" "Impossible condition"
+    badExit "103" "Impossible condition"
 fi
 
 # Get the episode list for the season
@@ -4790,7 +4794,7 @@ trap "badExit SIGQUIT" QUIT
 if [[ -e "${realPath%/*}/${scriptName%.bash}.env" ]]; then
     source "${realPath%/*}/${scriptName%.bash}.env"
 else
-    badExit "103" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
+    badExit "104" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
 fi
 
 # Validate config
@@ -4843,7 +4847,7 @@ else
     # Create our tmpDir
     if ! [[ -d "${tmpDir}" ]]; then
         if ! mkdir -p "${tmpDir}"; then
-            badExit "104" "Unable to create tmp dir [${tmpDir}]"
+            badExit "105" "Unable to create tmp dir [${tmpDir}]"
         fi
     fi
     tmpDir="$(mktemp -d -p "${tmpDir}")"
@@ -4882,7 +4886,7 @@ fi
 
 # Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
-    badExit "105" "Please fix above errors"
+    badExit "106" "Please fix above errors"
 fi
 
 #############################
@@ -5262,10 +5266,10 @@ if [[ "${doUpdate}" -eq "1" ]]; then
                 printOutput "1"  "${i}"
             done
         else
-            badExit "106" "Update downloaded, but unable to \`chmod +x\`"
+            badExit "107" "Update downloaded, but unable to \`chmod +x\`"
         fi
     else
-        badExit "107" "Unable to download Update"
+        badExit "108" "Unable to download Update"
     fi
     cleanExit
 fi
@@ -5304,7 +5308,7 @@ if [[ "${#chanIdLookup[@]}" -ne "0" ]]; then
                 printOutput "1" "API lookup for channel ID of handle [${ytId}] returned non-integer results [${apiResults}]"
                 continue
             else
-                badExit "108" "Impossible condition"
+                badExit "109" "Impossible condition"
             fi
 
             if [[ "${apiResults}" -eq "0" ]]; then
@@ -5375,14 +5379,14 @@ if ! [[ -e "${sqliteDb}" ]]; then
     if initDb "${sqliteDb}"; then
         printOutput "3" "DB successfully initialized [${sqliteDb}]"
     else
-        badExit "109" "Failed to initialize DB [${sqliteDb}]"
+        badExit "110" "Failed to initialize DB [${sqliteDb}]"
     fi
 fi
 
 # Preform database maintenance, if needed
 if [[ "${dbRebuild}" -eq "1" ]]; then
     startTime="$(($(date +%s%N)/1000000))"
-    printOutput "3" "${colorBlue}############## Performing database vacuum #############${colorReset}"
+    printOutput "3" "${colorBlue}############## Performing database rebuild ############${colorReset}"
 
     # ========== Validators ==========
     function validate_int { [[ "${1}" =~ ^[0-9]+$ ]]; }
@@ -5500,19 +5504,22 @@ if [[ "${dbRebuild}" -eq "1" ]]; then
     if mv "${sqliteDb}" "${dbBackup}"; then
         printOutput "3" "Backed up DB [${sqliteDb}] to [${dbBackup}]"
     else
-        badExit "110" "Failed to back up DB [${sqliteDb}] to [${dbBackup}]"
+        badExit "111" "Failed to back up DB [${sqliteDb}] to [${dbBackup}]"
     fi
     # Create a new DB
     if initDb "${sqliteDb}"; then
         printOutput "3" "DB successfully initialized [${sqliteDb}]"
     else
-        badExit "111" "Failed to initialize DB [${sqliteDb}]"
+        badExit "112" "Failed to initialize DB [${sqliteDb}]"
     fi
 
     # Import
     printOutput "4" "Importing instructions"
-    sqlite3 "${sqliteDb}" < "${sqlInstr}"
-    printOutput "3" "Database rebuild complete [Took $(timeDiff "${startTime}")]"
+    if sqlite3 "${sqliteDb}" < "${sqlInstr}"; then
+        printOutput "3" "Database rebuild complete [Took $(timeDiff "${startTime}")]"
+    else
+        printOutput "1" "Failed to import instructions"
+    fi
 
     # Print any errors
     if [[ "${#validationError[@]}" -ne "0" ]]; then
@@ -5544,7 +5551,7 @@ getContainerIp "${plexIp}"
 # Build our full address
 plexAdd="${plexScheme}://${containerIp}:${plexPort}"
 if ! callCurlGet "${plexAdd}/servers?X-Plex-Token=${plexToken}"; then
-    badExit "112" "Unable to intiate connection to the Plex Media Server"
+    badExit "113" "Unable to intiate connection to the Plex Media Server"
 fi
 # Make sure we can reach the server
 numServers="$(yq -p xml ".MediaContainer.+@size" <<<"${curlOutput}")"
@@ -5557,17 +5564,17 @@ elif [[ "${numServers}" -eq "1" ]]; then
     serverMachineId="$(yq -p xml ".MediaContainer.Server.+@machineIdentifier" <<<"${curlOutput}")"
     serverName="$(yq -p xml ".MediaContainer.Server.+@name" <<<"${curlOutput}")"
 else
-    badExit "113" "No Plex Media Servers found."
+    badExit "114" "No Plex Media Servers found."
 fi
 if [[ -z "${serverName}" || -z "${serverVersion}" || -z "${serverMachineId}" ]]; then
-    badExit "114" "Unable to validate Plex Media Server"
+    badExit "115" "Unable to validate Plex Media Server"
 fi
 # Get the library ID for our video output directory
 # Count how many libraries we have
 callCurlGet "${plexAdd}/library/sections/?X-Plex-Token=${plexToken}"
 numLibraries="$(yq -p xml ".MediaContainer.Directory | length" <<<"${curlOutput}")"
 if [[ "${numLibraries}" -eq "0" ]]; then
-    badExit "115" "No libraries detected in the Plex Media Server"
+    badExit "116" "No libraries detected in the Plex Media Server"
 fi
 z="0"
 while [[ "${z}" -lt "${numLibraries}" ]]; do
@@ -5590,13 +5597,13 @@ while [[ "${z}" -lt "${numLibraries}" ]]; do
     (( z++ ))
 done
 if [[ -z "${libraryId}" ]]; then
-    badExit "116" "Unable to identify [${outputDir}] from existing Plex libraries"
+    badExit "117" "Unable to identify [${outputDir}] from existing Plex libraries"
 fi
 if ! [[ "${libraryType}" == "show" ]]; then
-    badExit "117" "Plex Library not detected as 'TV Show' type library [Found: ${libraryType}] -- Unable to proceed"
+    badExit "118" "Plex Library not detected as 'TV Show' type library [Found: ${libraryType}] -- Unable to proceed"
 fi
 if ! [[ "${libraryScanner}" == "Plex Series Scanner" ]]; then
-    badExit "118" "Plex Library Scanner not detected as 'Plex Series Scanner' [Found: ${libraryScanner}] -- Unable to proceed"
+    badExit "119" "Plex Library Scanner not detected as 'Plex Series Scanner' [Found: ${libraryScanner}] -- Unable to proceed"
 fi
 
 # If we have audio support enabled, get the library ID for our audio library
@@ -6046,16 +6053,16 @@ if [[ "${#updateMetadataAlbum[@]}" -ne "0" ]]; then
                 if sqlite3 "${sqliteDb}" "INSERT INTO rating_key_album (FILE_ID, RATING_KEY, CREATED, UPDATED) VALUES ('${foundFileId//\'/\'\'}', ${albumRatingKey}, '$(date)', '$(date)');"; then
                     printOutput "5" "Initialized rating key for album file ID [${foundFileId}]"
                 else
-                    badExit "119" "Failed to initialize rating key for album file ID [${foundFileId}]"
+                    badExit "120" "Failed to initialize rating key for album file ID [${foundFileId}]"
                 fi
             elif [[ "${dbCount}" -eq "1" ]]; then
                 if sqlite3 "${sqliteDb}" "UPDATE rating_key_album SET RATING_KEY = ${albumRatingKey}, UPDATED = '$(date)' WHERE FILE_ID = '${foundFileId//\'/\'\'}';"; then
                     printOutput "5" "Updated rating key for album file ID [${foundFileId}]"
                 else
-                    badExit "120" "Failed to update rating key for album file ID [${foundFileId}]"
+                    badExit "121" "Failed to update rating key for album file ID [${foundFileId}]"
                 fi
             else
-                badExit "121" "Impossible condition"
+                badExit "122" "Impossible condition"
             fi
         done
         # 8. Print any file ID's left over in the double check array
@@ -6166,35 +6173,35 @@ if [[ "${#updateMetadataVideo[@]}" -ne "0" ]]; then
         # Get the path that it _should_ be at
         channelId="$(sqDb "SELECT CHANNEL_ID FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${channelId}" ]]; then
-            badExit "122" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
+            badExit "123" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
         fi
         channelPath="$(sqDb "SELECT PATH FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelPath}" ]]; then
-            badExit "123" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
+            badExit "124" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
         fi
         channelName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelName}" ]]; then
-            badExit "124" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
+            badExit "125" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
         fi
         channelNameClean="$(sqDb "SELECT NAME_SAFE FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelNameClean}" ]]; then
-            badExit "125" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
+            badExit "126" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
         fi
         vidYear="$(sqDb "SELECT UPLOAD_YEAR FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidYear}" ]]; then
-            badExit "126" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
+            badExit "127" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
         fi
         vidIndex="$(sqDb "SELECT YEAR_INDEX FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidIndex}" ]]; then
-            badExit "127" "Unable to determine video index for file ID [${ytId}] -- Possible database corruption"
+            badExit "128" "Unable to determine video index for file ID [${ytId}] -- Possible database corruption"
         fi
         vidTitle="$(sqDb "SELECT TITLE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidTitle}" ]]; then
-            badExit "128" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
+            badExit "129" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
         fi
         vidTitleClean="$(sqDb "SELECT TITLE_SAFE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidTitleClean}" ]]; then
-            badExit "129" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
+            badExit "130" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
         fi
         # String it together
         verifyPathCorrect="${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4"
@@ -6208,7 +6215,7 @@ if [[ "${#updateMetadataVideo[@]}" -ne "0" ]]; then
             printOutput "4" "File ID [${ytId}] not correctly named on file system -- Fixing"
             # Make sure our destination exists
             if ! [[ -d "${verifyPathCorrect%/*}" ]]; then
-                badExit "130" "Unexpected condition - Destination path [${verifyPathCorrect%/*}] for file ID [${verifyPath[0]}] does not exist"
+                badExit "131" "Unexpected condition - Destination path [${verifyPathCorrect%/*}] for file ID [${verifyPath[0]}] does not exist"
             fi
             if mv "${verifyPath[0]}" "${verifyPathCorrect}"; then
                 printOutput "3" "Corrected file ID [${ytId}] name on file system"
@@ -6357,7 +6364,7 @@ if [[ "${#importDir[@]}" -ne "0" ]]; then
                         # Safety check
                         printOutput "5" "File ID [${ytId}] already present in database"
                     else
-                        badExit "131" "Unexpected count returned [${dbCount}] for file ID [${ytId}] -- Possible database corruption"
+                        badExit "132" "Unexpected count returned [${dbCount}] for file ID [${ytId}] -- Possible database corruption"
                     fi
 
                     # Set its resolution
@@ -6395,7 +6402,7 @@ if [[ "${#importDir[@]}" -ne "0" ]]; then
                         # Safety check
                         printOutput "5" "File ID [${ytId}] already present in database"
                     else
-                        badExit "132" "Unexpected count returned [${dbCount}] for file ID [${ytId}] -- Possible database corruption"
+                        badExit "133" "Unexpected count returned [${dbCount}] for file ID [${ytId}] -- Possible database corruption"
                     fi
 
                     # Now add the file to our database
@@ -6716,7 +6723,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                         printOutput "1" "API lookup for channel ID of handle [${ytId}] returned non-integer results [${apiResults}] -- Skipping source"
                         continue
                     else
-                        badExit "133" "Impossible condition"
+                        badExit "134" "Impossible condition"
                     fi
 
                     if [[ "${apiResults}" -eq "0" ]]; then
@@ -6817,7 +6824,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                     fi
                 fi
             else
-                badExit "134" "Counted [${dbReply}] rows with file ID [${ytId}] -- Possible database corruption"
+                badExit "135" "Counted [${dbReply}] rows with file ID [${ytId}] -- Possible database corruption"
             fi
         elif [[ "${itemType}" == "channel" ]]; then
             # We should use ${channelId} for the channel ID rather than ${ytId} which could be the handle
@@ -6882,7 +6889,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                         fi
                     fi
                 else
-                    badExit "135" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
+                    badExit "136" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
                 fi
             done
         elif [[ "${itemType}" == "playlist" ]]; then
@@ -6949,7 +6956,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                     if sqDb "INSERT INTO playlist_order (FILE_ID, PLAYLIST_ID, PLAYLIST_INDEX, CREATED, UPDATED) VALUES ('${ytId//\'/\'\'}', '${plId//\'/\'\'}', ${plPos}, '$(date)', '$(date)');"; then
                         printOutput "3" "Added file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                     else
-                        badExit "136" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                        badExit "137" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                     fi
                 done
             elif [[ "${dbReply}" -eq "1" ]]; then
@@ -6967,7 +6974,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                     if sqDb "DELETE FROM playlist_order WHERE PLAYLIST_ID = '${plId//\'/\'\'}';"; then
                         printOutput "5" "Removed playlist order due to item count mismatch for playlist ID [${plId}] from database"
                     else
-                        badExit "137" "Failed to remove playlist order for playlist ID [${plId}] from database"
+                        badExit "138" "Failed to remove playlist order for playlist ID [${plId}] from database"
                     fi
                     # Add the order of items in the playlist_order table
                     plPos="0"
@@ -6978,7 +6985,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                         if sqDb "INSERT INTO playlist_order (FILE_ID, PLAYLIST_ID, PLAYLIST_INDEX, CREATED, UPDATED) VALUES ('${ytId}', '${plId//\'/\'\'}', ${plPos}, '$(date)', '$(date)');"; then
                             printOutput "5" "Added file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                         else
-                            badExit "138" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                            badExit "139" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                         fi
                     done
                 else
@@ -6995,7 +7002,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                             if sqDb "DELETE FROM playlist_order WHERE PLAYLIST_ID = '${plId//\'/\'\'}';"; then
                                 printOutput "5" "Removed playlist order due to order mismatch for playlist ID [${plId}] from database"
                             else
-                                badExit "139" "Failed to remove playlist order for playlist ID [${plId}] from database"
+                                badExit "140" "Failed to remove playlist order for playlist ID [${plId}] from database"
                             fi
                             # Add the order of items in the playlist_order table
                             plPos="0"
@@ -7006,7 +7013,7 @@ if [[ "${skipSource}" -eq "0" ]]; then
                                 if sqDb "INSERT INTO playlist_order (FILE_ID, PLAYLIST_ID, PLAYLIST_INDEX, CREATED, UPDATED) VALUES ('${ytId}', '${plId//\'/\'\'}', ${plPos}, '$(date)', '$(date)');"; then
                                     printOutput "3" "Updated file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                                 else
-                                    badExit "140" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
+                                    badExit "141" "Failed to add file ID [${ytId}] in position [${plPos}] for playlist ID [${plId}] to database"
                                 fi
                             done
                             # We can break the loop, as we've just re-done the whole entry
@@ -7015,9 +7022,9 @@ if [[ "${skipSource}" -eq "0" ]]; then
                     done
                 fi
             elif [[ "${dbReply}" -ge "2" ]]; then
-                badExit "141" "Database query returned [${dbReply}] results -- Possible database corruption"
+                badExit "142" "Database query returned [${dbReply}] results -- Possible database corruption"
             else
-                badExit "142" "Impossible condition"
+                badExit "143" "Impossible condition"
             fi
 
             for i in "${plVidList[@]}"; do
@@ -7057,27 +7064,27 @@ if [[ "${skipSource}" -eq "0" ]]; then
                         fi
                     fi
                 else
-                    badExit "143" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
+                    badExit "144" "Counted [${dbReply}] rows with file ID [${i}] -- Possible database corruption"
                 fi
             done
         fi
 
         if [[ "${updateConfig}" -eq "1" ]]; then
             if [[ "${#configArr[@]}" -ne "0" ]]; then
-                printOutput "3" "Updating [${#configArr[@]}] item configurations"
+                printOutput "3" "Updating [${#configArr[@]}] source item configurations"
                 # Get our row ID
                 configId="$(sqDb "SELECT INT_ID FROM hash WHERE FILE = '${source//\'/\'\'}';")"
                 if [[ -z "${configId}" ]]; then
                     # Row doesn't exist, initiate one
                     if ! sqDb "INSERT INTO hash (FILE, HASH, CREATED, UPDATED) VALUES ('${source//\'/\'\'}', '${sourceHash//\'/\'\'}', '$(date)', '$(date)');"; then
-                        badExit "144" "Failed to initiate row for config [${source}] in database"
+                        badExit "145" "Failed to initiate row for config [${source}] in database"
                     else
                         printOutput "5" "Successfully initiated row for config [${source}] in database"
                     fi
                 else
                     # Row exists, update it
                     if ! sqDb "UPDATE hash SET HASH = '${sourceHash//\'/\'\'}', UPDATED = '$(date)' WHERE INT_ID = ${configId};"; then
-                        badExit "145" "Failed to update row for config [${source}] in database"
+                        badExit "146" "Failed to update row for config [${source}] in database"
                     else
                         printOutput "5" "Successfully updated row for config [${source}] in database"
                     fi
@@ -7095,20 +7102,21 @@ if [[ "${skipSource}" -eq "0" ]]; then
         elif [[ "${updateConfig}" -eq "0" ]]; then
             if [[ "${#videoArr[@]}" -ne "0" ]]; then
                 # We should do a config update for each video in videoArr
-                printOutput "3" "Updating [${#videoArr[@]}] item configurations"
+                printOutput "3" "Updating [${#videoArr[@]}] video item configurations"
                 # Get our row ID
                 configId="$(sqDb "SELECT INT_ID FROM hash WHERE FILE = '${source//\'/\'\'}';")"
+                printOutput "5" "Isolated config ID [${configId}]"
                 if [[ -z "${configId}" ]]; then
                     # Row doesn't exist, initiate one
                     if ! sqDb "INSERT INTO hash (FILE, HASH, CREATED, UPDATED) VALUES ('${source//\'/\'\'}', '${sourceHash//\'/\'\'}', '$(date)', '$(date)');"; then
-                        badExit "146" "Failed to initiate row for config [${source}] in database"
+                        badExit "147" "Failed to initiate row for config [${source}] in database"
                     else
                         printOutput "5" "Successfully initiated row for config [${source}] in database"
                     fi
                 else
                     # Row exists, update it
                     if ! sqDb "UPDATE hash SET HASH = '${sourceHash//\'/\'\'}', UPDATED = '$(date)' WHERE INT_ID = ${configId};"; then
-                        badExit "147" "Failed to update row for config [${source}] in database"
+                        badExit "148" "Failed to update row for config [${source}] in database"
                     else
                         printOutput "5" "Successfully updated row for config [${source}] in database"
                     fi
@@ -7233,35 +7241,35 @@ if [[ "${#importArrVideo[@]}" -ne "0" ]]; then
         # Build our move-to path
         channelId="$(sqDb "SELECT CHANNEL_ID FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${channelId}" ]]; then
-            badExit "148" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
+            badExit "149" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
         fi
         channelPath="$(sqDb "SELECT PATH FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelPath}" ]]; then
-            badExit "149" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
+            badExit "150" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
         fi
         channelName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelName}" ]]; then
-            badExit "150" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
+            badExit "151" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
         fi
         channelNameClean="$(sqDb "SELECT NAME_SAFE FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         if [[ -z "${channelNameClean}" ]]; then
-            badExit "151" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
+            badExit "152" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
         fi
         vidYear="$(sqDb "SELECT UPLOAD_YEAR FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidYear}" ]]; then
-            badExit "152" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
+            badExit "153" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
         fi
         vidIndex="$(sqDb "SELECT YEAR_INDEX FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidIndex}" ]]; then
-            badExit "153" "Unable to determine video index for file ID [${ytId}] -- Possible database corruption"
+            badExit "154" "Unable to determine video index for file ID [${ytId}] -- Possible database corruption"
         fi
         vidTitle="$(sqDb "SELECT TITLE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidTitle}" ]]; then
-            badExit "154" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
+            badExit "155" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
         fi
         vidTitleClean="$(sqDb "SELECT TITLE_SAFE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         if [[ -z "${vidTitleClean}" ]]; then
-            badExit "155" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
+            badExit "156" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
         fi
 
         # We've got all the things we need, now make sure the destination folder(s) we need exist.
@@ -7269,7 +7277,7 @@ if [[ "${#importArrVideo[@]}" -ne "0" ]]; then
         if ! [[ -d "${outputDir}/${channelPath}" ]]; then
             # Create it
             if ! mkdir -p "${outputDir}/${channelPath}"; then
-                badExit "156" "Unable to create directory [${outputDir}/${channelPath}]"
+                badExit "157" "Unable to create directory [${outputDir}/${channelPath}]"
             fi
             newVideoDir+=("${channelId}")
 
@@ -7280,7 +7288,7 @@ if [[ "${#importArrVideo[@]}" -ne "0" ]]; then
         if ! [[ -d "${outputDir}/${channelPath}/Season ${vidYear}" ]]; then
             # Create the season directory
             if ! mkdir -p "${outputDir}/${channelPath}/Season ${vidYear}"; then
-                badExit "157" "Unable to create season directory [${outputDir}/${channelPath}/Season ${vidYear}"
+                badExit "158" "Unable to create season directory [${outputDir}/${channelPath}/Season ${vidYear}"
             fi
 
             # Create the season image
@@ -7315,12 +7323,12 @@ if [[ "${#importArrVideo[@]}" -ne "0" ]]; then
         if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
             printOutput "3" "Imported video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
             if ! sqDb "UPDATE media SET VIDEO_STATUS = '${vidStatus}', VIDEO_ERROR = NULL, UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                badExit "158" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
+                badExit "159" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
             fi
         else
             printOutput "1" "Failed to import [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
             if ! sqDb "UPDATE media SET VIDEO_STATUS = '${vidStatus}', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                badExit "159" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
+                badExit "160" "Unable to update status to [${vidStatus}] for file ID [${ytId}]"
             fi
         fi
     done
@@ -7347,31 +7355,31 @@ if [[ "${allowAudio}" -eq "1" ]]; then
             # Build our move-to path
             channelId="$(sqDb "SELECT CHANNEL_ID FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
             if [[ -z "${channelId}" ]]; then
-                badExit "160" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
+                badExit "161" "Unable to determine channel ID for file ID [${ytId}] -- Possible database corruption"
             fi
             channelPath="$(sqDb "SELECT PATH FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
             if [[ -z "${channelPath}" ]]; then
-                badExit "161" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
+                badExit "162" "Unable to determine channel path for file ID [${ytId}] -- Possible database corruption"
             fi
             channelName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
             if [[ -z "${channelName}" ]]; then
-                badExit "162" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
+                badExit "163" "Unable to determine channel name for file ID [${ytId}] -- Possible database corruption"
             fi
             channelNameClean="$(sqDb "SELECT NAME_SAFE FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
             if [[ -z "${channelNameClean}" ]]; then
-                badExit "163" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
+                badExit "164" "Unable to determine clean channel name for file ID [${ytId}] -- Possible database corruption"
             fi
             vidYear="$(sqDb "SELECT UPLOAD_YEAR FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
             if [[ -z "${vidYear}" ]]; then
-                badExit "164" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
+                badExit "165" "Unable to determine video year for file ID [${ytId}] -- Possible database corruption"
             fi
             vidTitle="$(sqDb "SELECT TITLE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
             if [[ -z "${vidTitle}" ]]; then
-                badExit "165" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
+                badExit "166" "Unable to determine video title for file ID [${ytId}] -- Possible database corruption"
             fi
             vidTitleClean="$(sqDb "SELECT TITLE_SAFE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
             if [[ -z "${vidTitleClean}" ]]; then
-                badExit "166" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
+                badExit "167" "Unable to determine clean video title for file ID [${ytId}] -- Possible database corruption"
             fi
 
             # Get the description so we can check for track splitting later
@@ -7403,7 +7411,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
             if ! [[ -d "${outputDirAudio}/${channelPathClean}" ]]; then
                 # Create it
                 if ! mkdir -p "${outputDirAudio}/${channelPathClean}"; then
-                    badExit "167" "Unable to create directory [${outputDirAudio}/${channelPath}]"
+                    badExit "168" "Unable to create directory [${outputDirAudio}/${channelPath}]"
                 fi
                 newAudioDir["${channelId}"]="true"
 
@@ -7418,7 +7426,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
             else
                 # Create the album directory
                 if ! mkdir -p "${outputDirAudio}/${channelPathClean}/${albumTitle}"; then
-                    badExit "168" "Unable to create album directory [${outputDirAudio}/${channelPath}/${albumTitle}]"
+                    badExit "169" "Unable to create album directory [${outputDirAudio}/${channelPath}/${albumTitle}]"
                 fi
                 newAlbumDir+=("${ytId}")
 
@@ -7460,7 +7468,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             # Format is HH:MM:SS
                             trackHours="${trackTime%%:*}"
                             if ! [[ "${trackHours}" =~ ^[0-9]+$ ]]; then
-                                badExit "169" "Track Hours for file ID [${ytId}] returned non integer [${trackHours}] from source [${trackTime}]"
+                                badExit "170" "Track Hours for file ID [${ytId}] returned non integer [${trackHours}] from source [${trackTime}]"
                             else
                                 # Trim leading zeroes so bash doesn't lose its shit
                                 while [[ "${trackHours:0:1}" -eq "0" && ! "${trackHours}" == "0" ]]; do
@@ -7470,7 +7478,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             trackMins="${trackTime#*:}"
                             trackMins="${trackMins%:*}"
                             if ! [[ "${trackMins}" =~ ^[0-9]+$ ]]; then
-                                badExit "170" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
+                                badExit "171" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
                             else
                                 # Trim leading zeroes so bash doesn't lose its shit
                                 while [[ "${trackMins:0:1}" -eq "0" && ! "${trackMins}" == "0" ]]; do
@@ -7479,7 +7487,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             fi
                             trackSecs="${trackTime##*:}"
                             if ! [[ "${trackSecs}" =~ ^[0-9]+$ ]]; then
-                                badExit "171" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
+                                badExit "172" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
                             else
                                 # Trim leading zeroes so bash doesn't lose its shit
                                 while [[ "${trackSecs:0:1}" -eq "0" && ! "${trackSecs}" == "0" ]]; do
@@ -7491,7 +7499,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             # Format is MM:SS
                             trackMins="${trackTime%:*}"
                             if ! [[ "${trackMins}" =~ ^[0-9]+$ ]]; then
-                                badExit "172" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
+                                badExit "173" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
                             else
                                 # Trim leading zeroes so bash doesn't lose its shit
                                 while [[ "${trackMins:0:1}" -eq "0" && ! "${trackMins}" == "0" ]]; do
@@ -7500,7 +7508,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             fi
                             trackSecs="${trackTime#*:}"
                             if ! [[ "${trackSecs}" =~ ^[0-9]+$ ]]; then
-                                badExit "173" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
+                                badExit "174" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
                             else
                                 # Trim leading zeroes so bash doesn't lose its shit
                                 while [[ "${trackSecs:0:1}" -eq "0" && ! "${trackSecs}" == "0" ]]; do
@@ -7509,7 +7517,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                             fi
                             trackTime="$(( trackMins * 60 + trackSecs ))"
                         else
-                            badExit "174" "Invalid time string format [${trackLine}]"
+                            badExit "175" "Invalid time string format [${trackLine}]"
                         fi
                     fi
                     trackTitle="${trackLine#* }"
@@ -7639,12 +7647,12 @@ if [[ "${allowAudio}" -eq "1" ]]; then
 
             if [[ "${audStatus}" == "downloaded" ]]; then
                 if ! sqDb "UPDATE config SET AUDIO_FORMAT = '${fileExt//\'/\'\'}', AUDIO_STATUS = '${audStatus}', AUDIO_ERROR = NULL, UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "175" "Unable to update status to [${audStatus}] for file ID [${ytId}]"
+                    badExit "176" "Unable to update status to [${audStatus}] for file ID [${ytId}]"
                 fi
             else
                 printOutput "1" "Failed to import [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
                 if ! sqDb "UPDATE media SET AUDIO_STATUS = '${audStatus}', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "176" "Unable to update status to [${audStatus}] for file ID [${ytId}]"
+                    badExit "177" "Unable to update status to [${audStatus}] for file ID [${ytId}]"
                 fi
             fi
         done
@@ -7668,91 +7676,91 @@ if [[ "${#downloadQueue[@]}" -ne "0" && "${skipDownload}" -eq "0" ]]; then
         vidTitle="$(sqDb "SELECT TITLE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${vidTitle}" ]]; then
-            badExit "177" "Retrieved blank title for file ID [${ytId}]"
+            badExit "178" "Retrieved blank title for file ID [${ytId}]"
         fi
 
         # Get the sanitized video title
         vidTitleClean="$(sqDb "SELECT TITLE_SAFE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${vidTitleClean}" ]]; then
-            badExit "178" "Retrieved blank clean title for file ID [${ytId}]"
+            badExit "179" "Retrieved blank clean title for file ID [${ytId}]"
         fi
 
         # Get the channel ID
         channelId="$(sqDb "SELECT CHANNEL_ID FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${channelId}" ]]; then
-            badExit "179" "Retrieved blank channel ID for file ID [${ytId}]"
+            badExit "180" "Retrieved blank channel ID for file ID [${ytId}]"
         fi
 
         # Get the channel name
         channelName="$(sqDb "SELECT NAME FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${channelName}" ]]; then
-            badExit "180" "Retrieved blank channel name for channel ID [${channelId}]"
+            badExit "181" "Retrieved blank channel name for channel ID [${channelId}]"
         fi
 
         # Get the clean channel name
         channelNameClean="$(sqDb "SELECT NAME_SAFE FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${channelNameClean}" ]]; then
-            badExit "181" "Retrieved blank clean channel name for channel ID [${channelId}]"
+            badExit "182" "Retrieved blank clean channel name for channel ID [${channelId}]"
         fi
 
         # Get the channel path
         channelPath="$(sqDb "SELECT PATH FROM channel WHERE CHANNEL_ID = '${channelId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${channelPath}" ]]; then
-            badExit "182" "Retrieved blank channel path for channel ID [${channelId}]"
+            badExit "183" "Retrieved blank channel path for channel ID [${channelId}]"
         fi
 
         # Get the season year
         vidYear="$(sqDb "SELECT UPLOAD_YEAR FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${vidYear}" ]]; then
-            badExit "183" "Retrieved blank year for file ID [${ytId}]"
+            badExit "184" "Retrieved blank year for file ID [${ytId}]"
         fi
 
         # Get the episode index
         vidIndex="$(sqDb "SELECT YEAR_INDEX FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${vidIndex}" ]]; then
-            badExit "184" "Retrieved blank index for file ID [${ytId}]"
+            badExit "185" "Retrieved blank index for file ID [${ytId}]"
         fi
 
         # Get the desired resolution
         videoOutput="$(sqDb "SELECT VIDEO_RESOLUTION FROM config WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${videoOutput}" ]]; then
-            badExit "185" "Retrieved blank video format for file ID [${ytId}]"
+            badExit "186" "Retrieved blank video format for file ID [${ytId}]"
         fi
 
         # Get the mark as watched option
         markWatched="$(sqDb "SELECT MARK_WATCHED FROM config WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${markWatched}" ]]; then
-            badExit "186" "Retrieved blank mark watched option for file ID [${ytId}]"
+            badExit "187" "Retrieved blank mark watched option for file ID [${ytId}]"
         fi
 
         # Get the sponsor block status
         sponsorblockOpts="$(sqDb "SELECT SPONSORBLOCK_ENABLED_VIDEO FROM config WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${sponsorblockOpts}" ]]; then
-            badExit "187" "Retrieved blank sponsor block setting for file ID [${ytId}]"
+            badExit "188" "Retrieved blank sponsor block setting for file ID [${ytId}]"
         fi
 
         # Get the thumbnail URL
         thumbUrl="$(sqDb "SELECT THUMBNAIL_URL FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${thumbUrl}" ]]; then
-            badExit "188" "Retrieved blank thumbnail URL for file ID [${ytId}]"
+            badExit "189" "Retrieved blank thumbnail URL for file ID [${ytId}]"
         fi
 
         # Get the video type
         vidType="$(sqDb "SELECT TYPE FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
         # Make sure it's not blank
         if [[ -z "${vidType}" ]]; then
-            badExit "189" "Retrieved blank video type for file ID [${ytId}]"
+            badExit "190" "Retrieved blank video type for file ID [${ytId}]"
         fi
         case "${vidType}" in
             video | normal_private)
@@ -7776,7 +7784,7 @@ if [[ "${#downloadQueue[@]}" -ne "0" && "${skipDownload}" -eq "0" ]]; then
         if ! [[ -d "${outputDir}/${channelPath}" ]]; then
             # Create it
             if ! mkdir -p "${outputDir}/${channelPath}"; then
-                badExit "190" "Unable to create directory [${outputDir}/${channelPath}]"
+                badExit "191" "Unable to create directory [${outputDir}/${channelPath}]"
             fi
             newVideoDir+=("${channelId}")
 
@@ -7788,7 +7796,7 @@ if [[ "${#downloadQueue[@]}" -ne "0" && "${skipDownload}" -eq "0" ]]; then
         if ! [[ -d "${outputDir}/${channelPath}/Season ${vidYear}" ]]; then
             # Create it
             if ! mkdir -p "${outputDir}/${channelPath}/Season ${vidYear}"; then
-                badExit "191" "Unable to create directory [${outputDir}/${channelPath}/Season ${vidYear}]"
+                badExit "192" "Unable to create directory [${outputDir}/${channelPath}/Season ${vidYear}]"
             fi
 
             # Create the season image
@@ -7897,33 +7905,33 @@ if [[ "${#downloadQueue[@]}" -ne "0" && "${skipDownload}" -eq "0" ]]; then
             printOutput "1" "============ End yt-dlp log ============"
             printOutput "1" "Skipping file ID [${ytId}]"
             if ! sqDb "UPDATE media SET VIDEO_STATUS = 'failed', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                badExit "192" "Unable to update status to [failed] for file ID [${ytId}]"
+                badExit "193" "Unable to update status to [failed] for file ID [${ytId}]"
             fi
             if [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: Join this channel from your computer or Android app to get access to members-only content like this video." ]]; then
                 # It's a members-only video. Mark it as 'skipped' rather than 'failed'.
                 if ! sqDb "UPDATE media SET TYPE = 'members_only', VIDEO_STATUS = 'skipped', VIDEO_ERROR = 'Video is members only', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "193" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
+                    badExit "194" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
                 fi
             elif [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: Join this channel to get access to members-only content like this video, and other exclusive perks." ]]; then
                 # It's a members-only video. Mark it as 'skipped' rather than 'failed'.
                 if ! sqDb "UPDATE media SET TYPE = 'members_only', VIDEO_STATUS = 'skipped', VIDEO_ERROR = 'Video is members only', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "194" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
+                    badExit "195" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
                 fi
             elif [[ "${dlpError}" =~ ^"ERROR: [youtube] ${ytId}: This video is available to this channel's members on level".*$ ]]; then
                 # It's a members-only video. Mark it as 'skipped' rather than 'failed'.
                 if ! sqDb "UPDATE media SET TYPE = 'members_only', VIDEO_STATUS = 'skipped', VIDEO_ERROR = 'Video is members only', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "195" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
+                    badExit "196" "Unable to update status to [skipped] due to being a members only video for file ID [${ytId}]"
                 fi
             elif [[ "${dlpError}" == "ERROR: [youtube] ${ytId}: This live stream recording is not available." ]]; then
                 # It's a previous live broadcast whose recording is not (and won't) be available
                 if ! sqDb "UPDATE media SET TYPE = 'hidden_broadcast', VIDEO_STATUS = 'skipped', VIDEO_ERROR = 'Video is a previous live broadcast with unavailable stream', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "196" "Unable to update status to [skipped] due to being a live broadcast with unavailable stream video for file ID [${ytId}]"
+                    badExit "197" "Unable to update status to [skipped] due to being a live broadcast with unavailable stream video for file ID [${ytId}]"
                 fi
             else
                 # Failed for some other reason
                 errorFormatted="$(printf "%s\n" "${dlpOutput[@]}")"
                 if ! sqDb "UPDATE media SET VIDEO_STATUS = 'failed', VIDEO_ERROR = '${errorFormatted//\'/\'\'}', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "197" "Unable to update status to [failed] for file ID [${ytId}]"
+                    badExit "198" "Unable to update status to [failed] for file ID [${ytId}]"
                 fi
             fi
             # Throttle if it's not the last item
@@ -7959,12 +7967,12 @@ if [[ "${#downloadQueue[@]}" -ne "0" && "${skipDownload}" -eq "0" ]]; then
         if [[ -e "${outputDir}/${channelPath}/Season ${vidYear}/${channelNameClean} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitleClean} [${ytId}].mp4" ]]; then
             printOutput "3" "Successfully imported video [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
             if ! sqDb "UPDATE media SET VIDEO_STATUS = 'downloaded', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                badExit "198" "Unable to update status to [downloaded] for file ID [${ytId}]"
+                badExit "199" "Unable to update status to [downloaded] for file ID [${ytId}]"
             fi
         else
             printOutput "1" "Failed to download [${channelName} - S${vidYear}E$(printf '%03d' "${vidIndex}") - ${vidTitle}]"
             if ! sqDb "UPDATE media SET VIDEO_STATUS = 'failed', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                badExit "199" "Unable to update status to [failed] for file ID [${ytId}]"
+                badExit "200" "Unable to update status to [failed] for file ID [${ytId}]"
             fi
         fi
 
@@ -8092,7 +8100,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 printOutput "4" "Extracting audio from source video in mp3 format"
                                 readarray -t ffmpegOutput < <(ffmpeg -i "${vidLoc}" -vn -b:a 192k "${tmpDir}/${ytId}.${outputAudio}" 2>&1)
                             else
-                                badExit "200" "Invalid audio output format [${outputAudio}]"
+                                badExit "201" "Invalid audio output format [${outputAudio}]"
                             fi
                             if ! [[ -e "${tmpDir}/${ytId}.${outputAudio}" ]]; then
                                 printOutput "1" "Failed to extract audio from [${vidLoc}] to [${tmpDir}/${ytId}.${outputAudio}]"
@@ -8153,7 +8161,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
             thumbUrl="$(sqDb "SELECT THUMBNAIL_URL FROM media WHERE FILE_ID = '${ytId//\'/\'\'}';")"
             # Make sure it's not blank
             if [[ -z "${thumbUrl}" ]]; then
-                badExit "201" "Retrieved blank thumbnail URL for file ID [${ytId}]"
+                badExit "202" "Retrieved blank thumbnail URL for file ID [${ytId}]"
             fi
             # Get the thumbnail
             callCurlDownload "${thumbUrl}" "${tmpDir}/${ytId}.jpg"
@@ -8191,7 +8199,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 # Format is HH:MM:SS
                                 trackHours="${trackTime%%:*}"
                                 if ! [[ "${trackHours}" =~ ^[0-9]+$ ]]; then
-                                    badExit "202" "Track Hours for file ID [${ytId}] returned non integer [${trackHours}] from source [${trackTime}]"
+                                    badExit "203" "Track Hours for file ID [${ytId}] returned non integer [${trackHours}] from source [${trackTime}]"
                                 else
                                     # Trim leading zeroes so bash doesn't lose its shit
                                     while [[ "${trackHours:0:1}" -eq "0" && ! "${trackHours}" == "0" ]]; do
@@ -8201,7 +8209,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 trackMins="${trackTime#*:}"
                                 trackMins="${trackMins%:*}"
                                 if ! [[ "${trackMins}" =~ ^[0-9]+$ ]]; then
-                                    badExit "203" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
+                                    badExit "204" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
                                 else
                                     # Trim leading zeroes so bash doesn't lose its shit
                                     while [[ "${trackMins:0:1}" -eq "0" && ! "${trackMins}" == "0" ]]; do
@@ -8210,7 +8218,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 fi
                                 trackSecs="${trackTime##*:}"
                                 if ! [[ "${trackSecs}" =~ ^[0-9]+$ ]]; then
-                                    badExit "204" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
+                                    badExit "205" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
                                 else
                                     # Trim leading zeroes so bash doesn't lose its shit
                                     while [[ "${trackSecs:0:1}" -eq "0" && ! "${trackSecs}" == "0" ]]; do
@@ -8222,7 +8230,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 # Format is MM:SS
                                 trackMins="${trackTime%:*}"
                                 if ! [[ "${trackMins}" =~ ^[0-9]+$ ]]; then
-                                    badExit "205" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
+                                    badExit "206" "Track Minutes for file ID [${ytId}] returned non integer [${trackMins}] from source [${trackTime}]"
                                 else
                                     # Trim leading zeroes so bash doesn't lose its shit
                                     while [[ "${trackMins:0:1}" -eq "0" && ! "${trackMins}" == "0" ]]; do
@@ -8231,7 +8239,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 fi
                                 trackSecs="${trackTime#*:}"
                                 if ! [[ "${trackSecs}" =~ ^[0-9]+$ ]]; then
-                                    badExit "206" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
+                                    badExit "207" "Track Seconds for file ID [${ytId}] returned non integer [${trackSecs}] from source [${trackTime}]"
                                 else
                                     # Trim leading zeroes so bash doesn't lose its shit
                                     while [[ "${trackSecs:0:1}" -eq "0" && ! "${trackSecs}" == "0" ]]; do
@@ -8240,7 +8248,7 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                                 fi
                                 trackTime="$(( trackMins * 60 + trackSecs ))"
                             else
-                                badExit "207" "Invalid time string format [${trackLine}]"
+                                badExit "208" "Invalid time string format [${trackLine}]"
                             fi
                         fi
                         trackTitle="${trackLine#* }"
@@ -8422,13 +8430,13 @@ if [[ "${allowAudio}" -eq "1" ]]; then
                 printOutput "1" "Failed to download [${channelName} - ${trackNameClean}]"
                 errorFormatted="$(printf "%s\n" "${audioCheckErrors[@]}")"
                 if ! sqDb "UPDATE media SET AUDIO_STATUS = 'failed', AUDIO_ERROR = '${errorFormatted//\'/\'\'}', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "208" "Unable to update status to [failed] for file ID [${ytId}]"
+                    badExit "209" "Unable to update status to [failed] for file ID [${ytId}]"
                 fi
             else
                 # Succeeded
                 printOutput "3" "Successfully imported album [${channelName} - ${trackNameClean}]"
                 if ! sqDb "UPDATE media SET AUDIO_STATUS = 'downloaded', UPDATED = '$(date)' WHERE FILE_ID = '${ytId//\'/\'\'}';"; then
-                    badExit "209" "Unable to update status to [downloaded] for file ID [${ytId}]"
+                    badExit "210" "Unable to update status to [downloaded] for file ID [${ytId}]"
                 fi
                 # Notate that we need to update the artist metadata
                 newAudioDir["${channelId}"]="true"
@@ -8773,7 +8781,7 @@ if [[ "${#updatePlaylist[@]}" -ne "0" ]]; then
                     printOutput "1" "Received no output for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
                     continue
                 elif ! [[ "${playlistRatingKey}" =~ ^[0-9]+$ ]]; then
-                    badExit "210" "Received non-interger [${playlistRatingKey}] for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
+                    badExit "211" "Received non-interger [${playlistRatingKey}] for playlist rating key for playlist ID [${plId}] on creation -- Skipping"
                 else
                     printOutput "3" "Created playlist [${plTitle}] successfully"
                     printOutput "4" "Added file ID [${plVidList[1]}] via rating key [${ratingKey}] to playlist [${playlistRatingKey}]"
