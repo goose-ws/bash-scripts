@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-07-04
+# Removed 'docker' from the dependency array, in addition to the previous edit
 # 2025-05-24
 # Removed the check for docker socket permission, if docker is not required
 # Added support for Discord messages
@@ -143,7 +145,7 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("awk" "curl" "docker" "jq" "md5sum" "printf" "rm")
+depArr=("awk" "curl" "jq" "md5sum" "printf" "rm")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
