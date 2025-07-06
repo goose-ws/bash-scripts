@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-07-06
+# Allow for Upper or Lowercase S and E.
 # 2025-07-04
 # Removed 'docker' from the dependency array, in addition to the previous edit
 # 2025-05-24
@@ -710,7 +712,7 @@ for containerName in "${containerIp[@]}"; do
         
         # Make sure we're dealing with a file that has a S#E# pattern, and not another pattern (Daily)
         # TODO: Add support for shows with a "Daily" episode code pattern
-        if [[ "${file}" =~ ^.*"S"[0-9]+"E"[0-9]+.*$ ]]; then
+        if [[ "${file}" =~ ^.*[Ss][0-9]+[Ee][0-9]+.*$ ]]; then
             printOutput "5" "Validated Season/Episode code formatting in file name"
         else
             printOutput "1" "Unable to validate Season/Episode code formatting for [${file}] -- Skipping"
@@ -723,18 +725,18 @@ for containerName in "${containerIp[@]}"; do
         for (( i=0; i<"${#file}"; i++ )); do
             char="${file:${i}:1}"
             char="${char^}"
-            if [[ "${char}" == "S" ]]; then
+            if [[ "${char}" =~ [Ss] ]]; then
                 # Store it, if the next character is a digit, string them together
                 storeCode="1"
                 epCode="${char}"
             elif [[ "${storeCode}" -eq "1" ]]; then
                 # We're storing the code.
-                # If it's a digit, or the letter 'E' add it
-                if [[ "${char}" =~ [0-9] || "${char}" == "E" ]]; then
+                # If it's a digit, or the letter 'E' or 'e' add it
+                if [[ "${char}" =~ [0-9] || "${char}" =~ [Ee] ]]; then
                     epCode="${epCode}${char}"
                 else
                     # If it's something else, our string should be built
-                    if [[ "${epCode}" =~ ^S[0-9]+E[0-9]+$ ]]; then
+                    if [[ "${epCode}" =~ ^[Ss][0-9]+[Ee][0-9]+$ ]]; then
                         # Matches, we're good, break the loop
                         break
                     else
