@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2025-07-06
+# Allow for Upper or Lowercase S and E.
 # 2025-07-04
 # Removed 'docker' from the dependency array, in addition to the previous edit
 # 2025-05-24
@@ -710,7 +712,7 @@ for containerName in "${containerIp[@]}"; do
         
         # Make sure we're dealing with a file that has a S#E# pattern, and not another pattern (Daily)
         # TODO: Add support for shows with a "Daily" episode code pattern
-        if [[ "${file}" =~ ^.*"S"[0-9]+"E"[0-9]+.*$ ]]; then
+        if [[ "${file}" =~ ^.*[Ss][0-9]+[Ee][0-9]+.*$ ]]; then
             printOutput "5" "Validated Season/Episode code formatting in file name"
         else
             printOutput "1" "Unable to validate Season/Episode code formatting for [${file}] -- Skipping"
