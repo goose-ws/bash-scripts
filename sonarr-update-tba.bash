@@ -725,18 +725,18 @@ for containerName in "${containerIp[@]}"; do
         for (( i=0; i<"${#file}"; i++ )); do
             char="${file:${i}:1}"
             char="${char^}"
-            if [[ "${char}" =~ [Ss] ]]; then
+            if [[ "${char}" == "S" ]]; then
                 # Store it, if the next character is a digit, string them together
                 storeCode="1"
                 epCode="${char}"
             elif [[ "${storeCode}" -eq "1" ]]; then
                 # We're storing the code.
-                # If it's a digit, or the letter 'E' or 'e' add it
-                if [[ "${char}" =~ [0-9] || "${char}" =~ [Ee] ]]; then
+                # If it's a digit, or the letter 'E' add it
+                if [[ "${char}" =~ [0-9] || "${char}" == "E" ]]; then
                     epCode="${epCode}${char}"
                 else
                     # If it's something else, our string should be built
-                    if [[ "${epCode}" =~ ^[Ss][0-9]+[Ee][0-9]+$ ]]; then
+                    if [[ "${epCode}" =~ ^S[0-9]+E[0-9]+$ ]]; then
                         # Matches, we're good, break the loop
                         break
                     else
