@@ -93,6 +93,38 @@ If you happen to find these scripts particularly helpful and have a few bucks to
 
 ---
 
+### Plex DLP Mirror (`plex-dlp-mirror.bash`)
+
+* **Docker**: The plan is to eventually convert this script to a standalone Docker container
+* **Purpose**: Mirrors media from various sources (e.g., YouTube) in a format compatible with Plex TV shows (Plex Series Scanner and Personal Media Shows agent) or as audio tracks (where each song becomes its own album). It utilizes `yt-dlp` for downloading.
+* **Requirements**:
+    * Dependencies: `awk`, `cmp`, `convert`, `curl`, `date`, `docker`, `ffmpeg`, `find`, `grep`, `identify`, `mktemp`, `shuf`, `sort`, `sqlite3`, `xxd`, `yq`, `yt-dlp`
+* **Installation**:
+    1.  Download the `.bash` script and the `.env.example` file.
+    2.  Rename `plex-dlp-mirror.env.example` to `plex-dlp-mirror.env` and customize it.
+    3.  Set up your Plex library:
+        * Type: TV Shows
+        * Folders: Path to your `${outputDir}`
+        * Advanced > Scanner: Plex Series Scanner
+        * Advanced > Agent: Personal Media Shows
+    4.  Create a source configuration directory (e.g., `plex-dlp-mirror.sources` in the same directory as the script).
+    5.  Inside this directory, create `.env` files for each media source (see the example source env on GitHub).
+    6.  Set the script to run via a cron job.
+* **Features**:
+    * Downloads and organizes videos as TV show seasons and episodes.
+    * Can download audio-only, treating each track as a separate album.
+    * Uses an SQLite database (`.plex-dlp-mirror.bash.db`) to track media, configurations, and Plex metadata.
+    * Integrates with SponsorBlock to skip or mark segments in videos/audio.
+    * Manages Plex metadata including series titles, summaries, posters, and watch status.
+    * Handles Plex collections and playlists based on YouTube playlists.
+    * Telegram and Discord notifications for downloads and errors.
+    * Self-update capability (`-u` or `--update`).
+    * Support for private playlists via cookies.
+    * Media import functionality (`-i` or `--import-media`).
+    * Manages a lockfile to prevent concurrent execution.
+
+---
+
 ### Plex Update TBA (`plex-update-tba.bash`)
 
 * **Purpose**: Searches your Plex Media Server for media items (episodes) titled "TBA" or "TBD" and attempts to refresh their metadata to get the correct titles.
@@ -157,6 +189,29 @@ If you happen to find these scripts particularly helpful and have a few bucks to
     * Supports multiple Sonarr instances if they are Docker-based; single host-based instance also supported.
     * Ignore lists for libraries, series, and episodes.
     * Manages a lockfile to prevent concurrent execution.
+
+---
+
+### Unifi Client Monitor (`unifi_client_monitor.bash`)
+
+* **Purpose**: Monitors `/var/log/daemon.log` on a Unifi device (likely a UDM) for DHCPACK entries, logs new client connections to an SQLite database, and sends Telegram notifications for newly seen clients or MAC addresses.
+* **Requirements**:
+    * `yq` (will attempt to download if missing)
+    * `sqlite3` (will attempt to `apt install` if missing)
+    * Dependencies: `curl`, `date`, `sqlite3`, `yq`
+* **Installation**:
+    1.  Download the `.bash` script and `unifi_client_monitor.env.example`.
+    2.  Rename `unifi_client_monitor.env.example` to `unifi_client_monitor.env` and customize with Telegram bot details and local DNS server IP.
+    3.  Place both files in a suitable directory on your Unifi device.
+    4.  Make the script executable: `chmod +x unifi_client_monitor.bash`.
+    5.  Run the script; it will background itself to continuously monitor the log. Consider using [on-boot.d](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) for persistance.
+* **Features**:
+    * Continuously monitors `/var/log/daemon.log` for new DHCP leases.
+    * Logs new client details (VLAN, MAC, IP, Name from DHCP, Timestamp) to an SQLite database (`.unifi_client_monitor.db`).
+    * Sends a Telegram notification when a new client (or a known MAC with a new IP/VLAN) is detected.
+    * Checks against a local DNS server for a hostname associated with the new IP address.
+    * Indicates if the MAC address has been seen before.
+    * Manages a lockfile to prevent concurrent execution of the main script (the monitoring part runs in the background).
 
 ---
 

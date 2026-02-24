@@ -18,6 +18,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-02-23
+# Fix Discord messaging
 # 2025-01-06
 # Added Discord messaging (See updated .env file)
 # Updated printOutput verbosity levels (See updated .env file)
@@ -150,23 +152,40 @@ removeLock
 exit 0
 }
 
+# Sends a message to Discord using a webhook URL
+# Usage: sendDiscordMessage "Your message text here"
 function sendDiscordMessage {
-    # Message to send should be passed as functional positional parameter #1
+    local message="${1}" # Message to send (positional parameter #1)
+
+    # Check if the Discord Webhook URL is configured
     if [[ -z "${discordWebhook}" ]]; then
-        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
-        return 0
+        printOutput "1" "No Discord Webhook URL provided (discordWebhook variable not set)."
+        return 1 # Return non-zero for error
     fi
 
-    # Make sure our message is not blank
-    if [[ -z "${1}" ]]; then
-        printOutput "1" "No message passed to send to Discord"
+    # Make sure the message is not blank
+    if [[ -z "${message}" ]]; then
+        printOutput "1" "No message passed to send to Discord."
         return 1
     fi
 
-    # Send the plain text message
-    # Positional parameter 2 is the URL
-    # Positional parameter 3 is the text
-    callCurlPost "${discordWebhook}" "${1}"
+    local escaped_message
+    escaped_message=${message//\\/\\\\} # Escape backslashes first
+    escaped_message=${escaped_message//\"/\\\"} # Escape double quotes
+
+    printOutput "5" "Attempting to send message to Discord."
+    # Send the JSON payload using callCurlPost
+    # Pass the webhook URL as ${1} and the JSON payload as ${2}
+    callCurlPost "${discordWebhook}" "${escaped_message}"
+    local curl_exit_code="${?}"    # Capture the exit code from callCurlPost
+
+    if [[ "${curl_exit_code}" -ne "0" ]]; then
+        printOutput "1" "Failed to send message to Discord via callCurlPost."
+        return 1 # Propagate the error
+    else
+        printOutput "5" "Message potentially sent to Discord successfully."
+        return 0 # Indicate success
+    fi
 }
 
 function callCurlPost {
@@ -175,9 +194,14 @@ if [[ -z "${1}" ]]; then
     printOutput "1" "No input URL provided for POST"
     return 1
 fi
+# Content should be "${2}"
+if [[ -z "${2}" ]]; then
+    printOutput "1" "No message provided for POST"
+    return 1
+fi
 
-printOutput "5" "Issuing curl command [curl -skL -X POST \"${1}\"]"
-curlOutput="$(curl -skL -X POST "${1}" 2>&1)"
+printOutput "5" "Issuing curl command [curl -skL -X POST -H \"Accept: application/json\" -H \"Content-Type:application/json\" --data \"{\\\"content\\\": \\\"${2//$'\n'/\\n}\\\"}\" \"${1}\"]"
+curlOutput="$(curl -skL -X POST -H "Accept: application/json" -H "Content-Type:application/json" --data "{\"content\": \"${2//$'\n'/\\n}\"}" "${1}" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
     printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"

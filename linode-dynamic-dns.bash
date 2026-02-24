@@ -16,6 +16,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-02-23
+# Fixed IPv6 support
 # 2024-01-27
 # Improved some sanity checks and logic for escape scenarioes
 # Added support for when a container has multiple networks attached (Multiple IP addresses)
@@ -286,7 +288,7 @@ if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     echo "Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
-if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
+if ! [[ "${outputVerbosity}" =~ ^[1-5]$ ]]; then
     echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
@@ -403,7 +405,9 @@ for i in "${recordNames[@]}"; do
     searchName="${i%.${domains[${ii}]}}"
     unset aRecords aaaaRecords
     readarray -t aRecords < <(jq -M -r " .data[] | select((.name == \"${searchName}\") and (.type == \"A\")) | .id" <<<"${recordsOutput}")
+    printOutput "4" "Found [${#aRecords[@]}] A records [${aRecords[*]}]"
     readarray -t aaaaRecords < <(jq -M -r " .data[] | select((.name == \"${searchName}\") and (.type == \"AAAA\")) | .id" <<<"${recordsOutput}")
+    printOutput "4" "Found [${#aaaaRecords[@]}] AAAA records [${aaaaRecords[*]}]"
     if [[ "$(( ${#aRecords[@]} + ${#aaaaRecords[@]} ))" -eq "0" ]]; then
         badExit "11" "No A or AAAA records detected"
     fi
@@ -500,7 +504,7 @@ for i in "${recordNames[@]}"; do
         else
             printOutput "3" "[ID: ${aaaaRecords[0]}] Target address: ${targetAddr[0]}"
         fi
-        if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
+        if [[ "${targetAddr[0]}" == "${v6addr}" ]]; then
             # Our addresses match, we can break this loop
             printOutput "2" "Assigned IPv6 address matches DNS record, skipping"
         else
@@ -528,7 +532,7 @@ for i in "${recordNames[@]}"; do
             -X PUT -d "{
             \"type\": \"AAAA\",
             \"name\": \"${targetName}\",
-            \"target\": \"${v4addr}\",
+            \"target\": \"${v6addr}\",
             \"priority\": ${targetPriority},
             \"weight\": ${targetWeight},
             \"port\": ${targetPort},
@@ -555,7 +559,7 @@ for i in "${recordNames[@]}"; do
                 if [[ "${#targetAddr[@]}" -gt "1" ]]; then
                     badExit "19" "Matched too many target addresses"
                 fi
-                if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
+                if [[ "${targetAddr[0]}" == "${v6addr}" ]]; then
                     printOutput "2" "A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}"
                     msgArr+=("A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}")
                 else

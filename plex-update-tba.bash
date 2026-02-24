@@ -600,6 +600,7 @@ if [[ "${#plexArr[@]}" -ge "1" ]]; then
             continue
         fi
         newTitle="$(yq -p xml ".MediaContainer.Video.\"+@title\"" <<<"${curlOutput}")"
+        # TODO: Add the media library to the msgArr
         if ! [[ "${newTitle}" =~ ^TB[AD]$ ]]; then
             msgArr+=("Renamed media item ${titleArr[${ratingKey}]} to: ${newTitle}")
             printOutput "3" "Renamed media item ${titleArr[${ratingKey}]} to: ${newTitle}"
