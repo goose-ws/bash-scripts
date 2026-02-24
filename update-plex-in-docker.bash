@@ -18,6 +18,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-02-23
+# Fix Discord messaging
 # 2025-01-06
 # Added Discord messaging (See updated .env file)
 # Updated printOutput verbosity levels (See updated .env file)
@@ -198,8 +200,8 @@ if [[ -z "${2}" ]]; then
     return 1
 fi
 
-printOutput "5" "Issuing curl command [curl -skL -H -X POST \"Accept: application/json\" -H \"Content-Type:application/json\" --data \"{\\\"content\\\": \\\"${3//$'\n'/\\n}\\\"}\" \"${1}\"]"
-curlOutput="$(curl -skL -X POST -H "Accept: application/json" -H "Content-Type:application/json" --data "{\"content\": \"${3//$'\n'/\\n}\"}" "${1}" 2>&1)"
+printOutput "5" "Issuing curl command [curl -skL -X POST -H \"Accept: application/json\" -H \"Content-Type:application/json\" --data \"{\\\"content\\\": \\\"${2//$'\n'/\\n}\\\"}\" \"${1}\"]"
+curlOutput="$(curl -skL -X POST -H "Accept: application/json" -H "Content-Type:application/json" --data "{\"content\": \"${2//$'\n'/\\n}\"}" "${1}" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
     printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
