@@ -35,6 +35,8 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-02-23
+# Updated output verbosity levels
 # 2025-07-06
 # Allow for Upper or Lowercase S and E.
 # 2025-07-04
