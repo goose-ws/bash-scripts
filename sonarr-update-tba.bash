@@ -191,21 +191,26 @@ echo "${$}" > "${lockFile}"
 ##    Standard Functions   ##
 #############################
 function printOutput {
+local msg="${2}"
+if [[ -n "${sonarrApiKey}" ]]; then
+    msg="${msg//${sonarrApiKey}/[Redacted API key]}"
+fi
 case "${1}" in
     0) logLevel="[reqrd]";; # Required
     1) logLevel="[error]";; # Errors
-    2) logLevel="[info] ";; # Informational
-    3) logLevel="[verb] ";; # Verbose
-    5) logLevel="[DEBUG]";; # Debug
+    2) logLevel="[warn] ";; # Warning
+    3) logLevel="[info] ";; # Informational
+    4) logLevel="[verb] ";; # Verbose
+    5) logLevel="[DEBUG]";; # Super Secret Debug
 esac
 if [[ "${1}" -le "${outputVerbosity}" ]]; then
-    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${2}"
+    echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   ${logLevel} ${msg}"
 fi
 }
 
 function removeLock {
 if rm -f "${lockFile}"; then
-    printOutput "3" "Lockfile removed"
+    printOutput "4" "Lockfile removed"
 else
     printOutput "1" "Unable to remove lockfile"
 fi
@@ -233,7 +238,7 @@ exit 0
 function sendDiscordMessage {
     # Message to send should be passed as functional positional parameter #1
     if [[ -z "${discordWebhook}" ]]; then
-        printOutput "5" "No Discord Webhook URL provided, unable to send Discord message"
+        printOutput "1" "No Discord Webhook URL provided, unable to send Discord message"
         return 0
     fi
 
@@ -282,13 +287,13 @@ elif [[ -z "${telegramOutput}" ]]; then
     printOutput "1" "Curl to Telegram to check Bot ID returned an empty string"
     skipTelegram="1"
 else
-    printOutput "3" "Curl exit code and null output checks passed"
+    printOutput "5" "Curl exit code and null output checks passed"
 fi
 if [[ "${skipTelegram}" -eq "0" ]]; then
     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
         printOutput "1" "Telegram bot API check failed"
     else
-        printOutput "2" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
+        printOutput "4" "Telegram bot API key authenticated: $(jq -M -r ".result.username" <<<"${telegramOutput}")"
         for chanId in "${telegramChannelId[@]}"; do
             if [[ -n "${2}" ]]; then
                 chanId="${2}"
@@ -300,8 +305,8 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
             elif [[ -z "${telegramOutput}" ]]; then
                 printOutput "1" "Curl to Telegram to check channel returned an empty string"
             elif [[ "$(jq -M -r ".ok" <<<"${telegramOutput,,}")" == "true" ]]; then
-                printOutput "3" "Curl exit code and null output checks passed"
-                printOutput "2" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
+                printOutput "5" "Curl exit code and null output checks passed"
+                printOutput "4" "Telegram channel authenticated: $(jq -M -r ".result.title" <<<"${telegramOutput}")"
                 telegramOutput="$(curl -skL --data-urlencode "text=${1}" "https://api.telegram.org/bot${telegramBotId}/sendMessage?chat_id=${chanId}&parse_mode=html" 2>&1)"
                 curlExitCode="${?}"
                 if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -309,7 +314,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                 elif [[ -z "${telegramOutput}" ]]; then
                     printOutput "1" "Curl to Telegram to send message returned an empty string"
                 else
-                    printOutput "3" "Curl exit code and null output checks passed"
+                    printOutput "4" "Curl exit code and null output checks passed"
                     # Check to make sure Telegram returned a true value for ok
                     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
                         printOutput "1" "Failed to send Telegram message:"
@@ -319,7 +324,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                         done < <(jq . <<<"${telegramOutput}")
                         printOutput "1" ""
                     else
-                        printOutput "2" "Telegram message sent successfully"
+                        printOutput "3" "Telegram message sent successfully"
                     fi
                 fi
             else
@@ -364,24 +369,24 @@ if ! [[ "${1}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1
             fi
         done < <(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "${1#*:}")
         if [[ "${#containerNetworking[@]}" -eq "0" ]]; then
-            printOutput "3" "No network type defined. Checking to see if networking is through another container."
+            printOutput "4" "No network type defined. Checking to see if networking is through another container."
             containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[].HostConfig.NetworkMode")"
-            printOutput "3" "Host config network mode: ${containerIp}"
+            printOutput "4" "Host config network mode: ${containerIp}"
             if [[ "${containerIp%%:*}" == "container" ]]; then
-                printOutput "3" "Networking routed through another container. Retrieving IP address."
+                printOutput "4" "Networking routed through another container. Retrieving IP address."
                 containerIp="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${containerIp#container:}")"
             else
                 printOutput "1" "Unable to determine networking type"
                 unset containerIp
             fi
         else
-            printOutput "3" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
+            printOutput "4" "Container is utilizing ${#containerNetworking[@]} network type(s): ${containerNetworking[*]}"
             for i in "${containerNetworking[@]}"; do
                 if [[ "${i}" == "host" ]]; then
-                    printOutput "3" "Networking type: ${i}"
+                    printOutput "4" "Networking type: ${i}"
                     containerIp="127.0.0.1"
                 else
-                    printOutput "3" "Networking type: ${i}"
+                    printOutput "4" "Networking type: ${i}"
                     containerIp="$(docker inspect "${1#*:}" | jq -M -r ".[] | .NetworkSettings.Networks.\"${i}\".IPAddress")"
                     if [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
                         break
@@ -399,7 +404,7 @@ fi
 if [[ -z "${containerIp}" ]] || ! [[ "${containerIp}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.([0-9]{1,3}|[0-9]/[0-9]{1,2})$ ]]; then
     badExit "3" "Unable to determine IP address via networking mode: ${i}"
 else
-    printOutput "3" "Container IP address: ${containerIp}"
+    printOutput "4" "Container IP address: ${containerIp}"
 fi
 }
 
@@ -434,7 +439,7 @@ case "${1,,}" in
         done < "${0}"
         if curl -skL "${updateURL}" -o "${0}"; then
             if chmod +x "${0}"; then
-                printOutput "1" "Update complete"
+                printOutput "0" "Update complete"
                 newStartLine="0"
                 while read -r i; do
                     if [[ "${newStartLine}" -eq "2" ]]; then
@@ -453,9 +458,9 @@ case "${1,,}" in
                     fi
                 done < <(curl -skL "${updateURL}")
 
-                printOutput "1"  "Changelog:"
+                printOutput "0"  "Changelog:"
                 for i in "${changelogArr[@]}"; do
-                    printOutput "1"  "${i}"
+                    printOutput "0" "${i}"
                 done
                 cleanExit
             else
@@ -481,7 +486,7 @@ if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Option to check for updates not valid. Assuming no."
     updateCheck="No"
 fi
-if ! [[ "${outputVerbosity}" =~ ^[1-3]$ ]]; then
+if ! [[ "${outputVerbosity}" =~ ^[1-5]$ ]]; then
     echo "${0##*/}   ::   $(date "+%Y-%m-%d %H:%M:%S")   ::   [1] Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
@@ -516,7 +521,7 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
             fi
         fi
     else
-        printOutput "3" "No new updates available"
+        printOutput "4" "No new updates available"
     fi
 fi
 
@@ -524,19 +529,30 @@ fi
 ##         Payload         ##
 #############################
 for containerName in "${containerIp[@]}"; do
-    printOutput "2" "Processing instance: ${containerName}"
+    printOutput "3" "Processing instance: ${containerName}"
     if [[ "${containerName%%:*}" == "docker" ]]; then
+        printOutput "5" "Docker detected"
         # If using docker, we should ensure we have permissions to do so
         if ! docker version > /dev/null 2>&1; then
             badExit "8" "Do not appear to have permission to run on the docker socket ('docker version' returned non-zero exit code)"
+        else
+            printOutput "5" "Docker socket validated"
         fi
     fi
     getContainerIp "${containerName}"
 
     # Read Sonarr config file
     if [[ "${containerName%%:*}" == "docker" ]]; then
-        sonarrConfig="$(docker exec "${containerName#docker:}" cat /config/config.xml | tr -d '\r')"
+        printOutput "5" "Reading Sonarr configuration from within Docker container"
+        sonarrConfigPath="/config/config.xml"
+        if docker exec "${containerName#docker:}" stat "${sonarrConfigPath}" > /dev/null 2>&1; then
+            printOutput "5" "Validated Sonarr config in Docker exists at: ${sonarrConfigPath}"
+        else
+            badExit "1" "Failed to validate Sonarr config in Docker at: ${sonarrConfigPath}"
+        fi
+        sonarrConfig="$(docker exec "${containerName#docker:}" cat ${sonarrConfigPath} | tr -d '\r')"
     else
+        printOutput "5" "Bare metal Sonarr detected -- Reading config from disk"
         if [[ "${#containerIp[@]}" -ne "1" ]]; then
             badExit "9" "Unable to process more than one instance of Sonarr if not using Docker [Counted ${#containerIp[@]} instances: ${containerIp[*]}]"
         fi
@@ -550,7 +566,7 @@ for containerName in "${containerIp[@]}"; do
     if [[ -z "${sonarrConfig}" ]]; then
         badExit "12" "Failed to read Sonarr config file"
     else
-        printOutput "2" "Configuration file retrieved"
+        printOutput "3" "Configuration file retrieved"
     fi
 
     # Get Sonarr port from config file
@@ -560,8 +576,8 @@ for containerName in "${containerIp[@]}"; do
     if ! [[ "${sonarrPort}" =~ ^[0-9]+$ ]]; then
         badExit "13" "Failed to obtain port"
     else
-        printOutput "2" "Port retrieved from config file"
-        printOutput "3" "Port: ${sonarrPort}"
+        printOutput "3" "Port retrieved from config file"
+        printOutput "4" "Port: ${sonarrPort}"
     fi
 
     # Get Sonarr API key from config file
@@ -571,8 +587,8 @@ for containerName in "${containerIp[@]}"; do
     if [[ -z "${sonarrApiKey}" ]]; then
         badExit "14" "Failed to obtain API key"
     else
-        printOutput "2" "API key retrieved from config file"
-        printOutput "3" "API key: ${sonarrApiKey}"
+        printOutput "3" "API key retrieved from config file"
+        printOutput "4" "API key: ${sonarrApiKey}"
     fi
 
     # Get Sonarr URL base from config file
@@ -580,30 +596,31 @@ for containerName in "${containerIp[@]}"; do
     sonarrUrlBase="${sonarrUrlBase#<UrlBase>}"
     sonarrUrlBase="${sonarrUrlBase%</UrlBase>}"
     if [[ -z "${sonarrUrlBase}" ]]; then
-        printOutput "2" "No URL base detected"
+        printOutput "3" "No URL base detected"
     else
-        printOutput "2" "URL base detected"
-        printOutput "3" "URL base: ${sonarrUrlBase}"
+        printOutput "3" "URL base detected"
+        printOutput "4" "URL base: ${sonarrUrlBase}"
     fi
 
     # Test Sonarr API
-    printOutput "3" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}/api/system/status"
-    printOutput "2" "Checking API functionality"
+    printOutput "4" "Built Sonarr URL: ${containerIp}:${sonarrPort}${sonarrUrlBase}"
+    printOutput "3" "Checking API functionality"
     apiCheck="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}/api/v3/system/status" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     curlExitCode="${?}"
+    printOutput "5" "Curl exit code: ${curlExitCode}"
     if [[ "${curlExitCode}" -ne "0" ]]; then
         badExit "15" "Curl returned non-zero exit code: ${curlExitCode}"
     elif grep -q '"error": "Unauthorized"' <<<"${apiCheck}"; then
         badExit "16" "Authorization failure: ${apiCheck}"
     else
-        printOutput "2" "API authorization succeded"
+        printOutput "3" "API authorization succeded"
     fi
 
     # Determine which version of the API we need to use
     # Sonarr v3 and v4 use API v3
     sonarrVersion="$(jq -M -r ".version" <<<"${apiCheck}")"
     if [[ "${sonarrVersion:0:1}" -eq "3" || "${sonarrVersion:0:1}" -eq "4" ]]; then
-        printOutput "3" "Detected Sonarr v${sonarrVersion:0:1}, API v3"
+        printOutput "4" "Detected Sonarr v${sonarrVersion:0:1}, API v3"
         apiRootFolder="/api/v3/rootfolder"
         apiSeries="/api/v3/series"
         apiCommand="/api/v3/command"
@@ -619,21 +636,24 @@ for containerName in "${containerIp[@]}"; do
     if [[ -z "${findRegex}" ]]; then
         findRegex=".*TB[AD].*\.([Aa][Ss][Ff]|[Aa][Vv][Ii]|[Mm][Oo][Vv]|[Mm][Pp]4|([Mm][Pp][Ee][Gg])?[Tt][Ss]|[Mm][Kk][Vv]|[Ww][Mm][Vv])$"
     fi
+    printOutput "5" "Find Regex: ${findRegex}"
 
     # Retrieve Sonarr libraries via API
     libraries="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiRootFolder}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
     numLibraries="$(jq -M length <<<"${libraries}")"
-    printOutput "2" "Detected ${numLibraries} libraries"
+    printOutput "3" "Detected ${numLibraries} libraries"
     unset libraryArr
     for i in $(seq 0 $(( numLibraries - 1 ))); do
+        printOutput "5" "Iterating through library ID: ${i}"
         libraryPath="$(jq -M -r ".[${i}].path" <<<"${libraries}")"
         libraryId="$(jq -M -r ".[${i}].id" <<<"${libraries}")"
         
         # Check to see if we should ignore the found library
         for ignoreId in "${ignoreLibrary[@]}"; do
+            printOutput "5" "Iterating through ignored library ID: ${ignoreId}"
             if [[ "${#containerIp[@]}" -eq "1" ]]; then
                 if [[ "${ignoreId}" == "${libraryId}" ]]; then
-                    printOutput "2" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
+                    printOutput "3" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
                     continue 2
                 fi
             else
@@ -643,7 +663,7 @@ for containerName in "${containerIp[@]}"; do
                 fi
                 if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
                     if [[ "${ignoreId##*:}" == "${libraryId}" ]]; then
-                        printOutput "2" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
+                        printOutput "3" "Library ID [${libraryId}] set to be ignored in config -- Skipping"
                         continue 2
                     fi
                 fi
@@ -652,7 +672,7 @@ for containerName in "${containerIp[@]}"; do
         
         libraryArr+=("${libraryPath}")
         if [[ "${outputVerbosity}" -ge "3" ]]; then
-            printOutput "3" "- ${libraryPath} [Library ID: ${libraryId}]"
+            printOutput "4" "- ${libraryPath} [Library ID: ${libraryId}]"
         fi
     done
 
@@ -660,44 +680,50 @@ for containerName in "${containerIp[@]}"; do
     # Supported media types per https://www.plexopedia.com/plex-media-server/general/file-formats-supported-plex/#video
     # ASF, AVI, MOV, MP4, MPEGTS, TS, MKV, wmv
     # Have to use 'grep' as the busybox version of the Sonarr v4 container does not support '-iregex'
-    # Can add support for others by modifying the 'grep' line below
+    # Can add support for others by modifying the 'findRegex' line above
     unset files
     for i in "${libraryArr[@]}"; do
-        printOutput "2" "Checking for TBA/TBD items in ${i}"
+        printOutput "3" "Checking for TBA/TBD items in ${i}"
         matches="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
+            printOutput "5" "Initiating check for Docker Sonarr"
             if ! docker exec "${containerName#docker:}" test -d "${i}"; then
                 printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
                 continue
+            else
+                printOutput "5" "Validated directory: ${i}"
             fi
             while read -r ii; do
-                printOutput "3" "Found TBA/TBD item: ${ii}"
+                printOutput "4" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
             done < <(docker exec "${containerName#docker:}" find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         else
+            printOutput "5" "Initiating check for bare metal Sonarr"
             # Make sure our find directory actually exists
             if ! [[ -d "${i}" ]]; then
                 printOutput "1" "Directory does not appear to exist: ${i} -- Skipping"
                 continue
+            else
+                printOutput "5" "Validated directory: ${i}"
             fi
             while read -r ii; do
-                printOutput "3" "Found TBA/TBD item: ${ii}"
+                printOutput "4" "Found TBA/TBD item: ${ii}"
                 files+=("${i}:${ii}")
                 (( matches++ ))
             done < <(find "${i}" -type f -regextype egrep -regex "${findRegex}" | tr -d '\r' | sort)
         fi
     done
     
-    printOutput "2" "Located ${#files[@]} files to process"
+    printOutput "3" "Located ${#files[@]} files to process"
 
     # If the array of files matching the search pattern is not empty, iterate through them
     for file in "${files[@]}"; do
         rootFolder="${file%%:*}"
         file="${file#*:}"
-        printOutput "3" "Library: ${rootFolder} | File: ${file#${rootFolder}}"
-        printOutput "2" "Processing ${file##*/}"
-        printOutput "3" "Verifying file has not already been renamed"
+        printOutput "5" "Library: ${rootFolder} | File: ${file#${rootFolder}}"
+        printOutput "3" "Processing ${file##*/}"
+        printOutput "4" "Verifying file has not already been renamed"
         # Quick check to ensure that we actually need to do this. Perhaps there were multiple TBA's in a series, and we got all of them on the first run?
         fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
@@ -709,11 +735,12 @@ for containerName in "${containerIp[@]}"; do
                 fileExists="1"
             fi
         fi
+        printOutput "5" "File Exists value: ${fileExists}"
         
         # Make sure we're dealing with a file that has a S#E# pattern, and not another pattern (Daily)
         # TODO: Add support for shows with a "Daily" episode code pattern
         if [[ "${file}" =~ ^.*[Ss][0-9]+[Ee][0-9]+.*$ ]]; then
-            printOutput "5" "Validated Season/Episode code formatting in file name"
+            printOutput "4" "Validated Season/Episode code formatting in file name"
         else
             printOutput "1" "Unable to validate Season/Episode code formatting for [${file}] -- Skipping"
             continue
@@ -752,6 +779,7 @@ for containerName in "${containerIp[@]}"; do
         fileSeasonNum="${epCode%E*}"
         fileSeasonNum="${fileSeasonNum#S}"
         fileEpisodeNum="${epCode#*E}"
+        printOutput "5" "Extracted Season ${fileSeasonNum} Episode ${fileEpisodeNum}"
         
         # Check it for sanity
         if [[ -z "${fileSeasonNum}" || -z "${fileEpisodeNum}" ]]; then
@@ -768,18 +796,20 @@ for containerName in "${containerIp[@]}"; do
             # Find the series ID by searching for a series with the matching path
             seriesFolder="${file#${rootFolder}/}"
             seriesFolder="${seriesFolder%%/*}"
-            printOutput "3" "Root folder: ${rootFolder} | Series folder: ${seriesFolder}"
+            printOutput "5" "Root folder: ${rootFolder} | Series folder: ${seriesFolder}"
             # Build the series path
             seriesPath="${rootFolder}/${seriesFolder}"
+            printOutput "5" "Series Path: ${seriesPath}"
             # Find the series which matches the path
             series="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiSeries}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.path==\"${seriesPath}\")")"
             if [[ -n "${series}" ]]; then
-                printOutput "3" "Found series: $(jq -M -r ".title" <<<"${series}")"
+                printOutput "4" "Found series: $(jq -M -r ".title" <<<"${series}")"
             else
                 badExit "21" "Unable to find series"
             fi
             # Get the title of the series
             seriesTitle="$(jq -M -r ".title" <<<"${series}")"
+            printOutput "5" "Extracted Series Title: ${seriesTitle}"
             
             # Get the series ID for the series
             readarray -t seriesId < <(jq -M -r ".id" <<<"${series}")
@@ -793,14 +823,15 @@ for containerName in "${containerIp[@]}"; do
             elif ! [[ "${seriesId[0]}" =~ ^[0-9]+$ ]]; then
                 badExit "25" "Bad series ID lookup [${#seriesId[@]}]"
             else
-                printOutput "3" "Found series ID: ${seriesId[0]}"
+                printOutput "4" "Found series ID: ${seriesId[0]}"
             fi
             
             # Check to see if we should ignore the found series
             for ignoreId in "${ignoreSeries[@]}"; do
+                printOutput "5" "Iterating through ignore series ID: ${ignoreId}"
                 if [[ "${#containerIp[@]}" -eq "1" ]]; then
                     if [[ "${ignoreId}" == "${seriesId[0]}" ]]; then
-                        printOutput "2" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
+                        printOutput "3" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
                         continue 2
                     fi
                 else
@@ -810,7 +841,7 @@ for containerName in "${containerIp[@]}"; do
                     fi
                     if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
                         if [[ "${ignoreId##*:}" == "${seriesId[0]}" ]]; then
-                            printOutput "2" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
+                            printOutput "3" "Series ID [${seriesId[0]}] set to be ignored in config -- Skipping"
                             continue 2
                         fi
                     fi
@@ -824,16 +855,17 @@ for containerName in "${containerIp[@]}"; do
             elif ! [[ "${epId}" =~ ^[0-9]+$ ]]; then
                 badExit "27" "Episode ID does not appear to be valid: ${epId}"
             elif [[ "${epId}" =~ ^[0-9]+$ ]]; then
-                printOutput "3" "Found episode ID: ${epId}"
+                printOutput "4" "Found episode ID: ${epId}"
             else
                 badExit "28" "Impossible condition"
             fi
             
             # Check to see if we should ignore the found file
             for ignoreId in "${ignoreEpisodes[@]}"; do
+                printOutput "5" "Iterating through ignore episode ID: ${ignoreId}"
                 if [[ "${#containerIp[@]}" -eq "1" ]]; then
                     if [[ "${ignoreId}" == "${epId}" ]]; then
-                        printOutput "2" "Episode ID [${epId}] set to be ignored in config -- Skipping"
+                        printOutput "3" "Episode ID [${epId}] set to be ignored in config -- Skipping"
                         continue 2
                     fi
                 else
@@ -843,7 +875,7 @@ for containerName in "${containerIp[@]}"; do
                     fi
                     if [[ "${containerName}" == "${ignoreId%:*}" ]]; then
                         if [[ "${ignoreId##*:}" == "${epId}" ]]; then
-                            printOutput "2" "Episode ID [${epId}] set to be ignored in config -- Skipping"
+                            printOutput "3" "Episode ID [${epId}] set to be ignored in config -- Skipping"
                             continue 2
                         fi
                     fi
@@ -854,14 +886,14 @@ for containerName in "${containerIp[@]}"; do
             skipRefresh="0"
             for checkId in "${refreshedSeries[@]}"; do
                 if [[ "${checkId}" == "${seriesId[0]}" ]]; then
-                    printOutput "3" "Series ID [${seriesId[0]}] has already been refreshed"
+                    printOutput "4" "Series ID [${seriesId[0]}] has already been refreshed"
                     skipRefresh="1"
                     break
                 fi
             done
             
             if [[ "${skipRefresh}" -eq "0" ]]; then
-                printOutput "2" "Issuing refresh command for: ${seriesTitle}"
+                printOutput "3" "Issuing refresh command for: ${seriesTitle}"
                 commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\": \"RefreshSeries\", \"seriesId\": ${seriesId[0]}}" 2>&1)"
                 commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
                 refreshedSeries+=("${seriesId[0]}")
@@ -871,28 +903,28 @@ for containerName in "${containerIp[@]}"; do
                 
                 # Check the command status queue to see if the command is done
                 commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
                 if ! [[ "${commandStatus,,}" == "completed" ]]; then
                     while [[ -n "${commandStatus}" ]]; do
                         if [[ "${commandStatus,,}" == "completed" ]]; then
-                            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
                             break
                         else
-                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                            printOutput "4" "Command status [${commandId}]: ${commandStatus,,}"
                         fi
                         sleep 1
                         commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
                     done
                 fi
                 if [[ -z "${commandStatus}" ]]; then
-                    printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                    printOutput "2" "Unable to retrieve command ID ${commandId} from command log"
                     printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                     sleep 15
                 fi
             fi
 
             # Rename the specific episode
-            printOutput "2" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
+            printOutput "3" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
             commandOutput="$(curl -skL -X POST "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" -d "{\"name\":\"RenameFiles\", \"seriesId\":${seriesId[0]}, \"files\":[${epId}]}" 2>&1)"
             commandId="$(jq -M -r ".id" <<< "${commandOutput}")"
 
@@ -901,29 +933,29 @@ for containerName in "${containerIp[@]}"; do
             
             # Check the command status queue to see if the command is done
             commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-            printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
             if ! [[ "${commandStatus,,}" == "completed" ]]; then
                 while [[ -n "${commandStatus}" ]]; do
                     if [[ "${commandStatus,,}" == "completed" ]]; then
-                        printOutput "2" "Command status [${commandId}]: ${commandStatus,,}"
+                        printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
                         break
                     else
-                        printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                        printOutput "4" "Command status [${commandId}]: ${commandStatus,,}"
                     fi
                     sleep 1
                     commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
                 done
             fi
             if [[ -z "${commandStatus}" ]]; then
-                printOutput "1" "Unable to retrieve command ID ${commandId} from command log"
+                printOutput "2" "Unable to retrieve command ID ${commandId} from command log"
                 printOutput "3" "Sleeping 15 seconds to attempt to ensure system has time to process command"
                 sleep 15
             fi
         else
-            printOutput "3" "File does not exist at same path, appears to have been renamed"
+            printOutput "4" "File does not exist at same path, appears to have been renamed"
         fi
         # Check to see if rename happened
-        printOutput "3" "Checking to see if file was renamed"
+        printOutput "4" "Checking to see if file was renamed"
         fileExists="0"
         if [[ "${containerName%%:*}" == "docker" ]]; then
             if docker exec "${containerName#docker:}" stat "${file}" > /dev/null 2>&1; then
@@ -934,8 +966,9 @@ for containerName in "${containerIp[@]}"; do
                 fileExists="1"
             fi
         fi
+        printOutput "5" "File Exists value: ${fileExists}"
         if [[ "${fileExists}" -eq "0" ]]; then
-            printOutput "3" "File appears to have been renamed -- Requesting new file name from Sonarr"
+            printOutput "4" "File appears to have been renamed -- Requesting new file name from Sonarr"
             episodeName="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
             episodeName="$(jq -M -r ".[] | select (.episodeNumber==${fileEpisodeNum}) | .title" <<<"${episodeName}")"
             # In case the episode name is an illegal file name, such as The Changeling S01E03.
@@ -944,9 +977,9 @@ for containerName in "${containerIp[@]}"; do
                 episodeName="[Unable to retrieve]"
             fi
             msgArr+=("[${containerName}] Renamed file ${seriesTitle} - ${epCode} to: <i>${episodeName}</i>")
-            printOutput "2" "Renamed file ${seriesTitle} - ${epCode} to: ${episodeName}"
+            printOutput "3" "Renamed file ${seriesTitle} - ${epCode} to: ${episodeName}"
         else
-            printOutput "2" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
+            printOutput "3" "File name unchanged, new title unavailable for: ${seriesTitle} ${epCode}"
         fi
     done
 done
@@ -954,14 +987,14 @@ done
 if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && "${#msgArr[@]}" -ne "0" ]]; then
     dockerHost="$(</etc/hostname)"
     if [[ "${outputVerbosity}" -ge "3" ]]; then
-        printOutput "3" "Counted ${#msgArr[@]} messages to send:"
+        printOutput "4" "Counted ${#msgArr[@]} messages to send:"
         for i in "${msgArr[@]}"; do
-            printOutput "3" "- ${i}"
+            printOutput "4" "- ${i}"
         done
     fi
     eventText="<b>Sonarr file rename for ${dockerHost%%.*}</b>${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
-    printOutput "3" "Got hostname: ${dockerHost}"
-    printOutput "2" "Telegram messaging enabled -- Passing message to function"
+    printOutput "4" "Got hostname: ${dockerHost}"
+    printOutput "3" "Telegram messaging enabled -- Passing message to function"
     sendTelegramMessage "${eventText}"
 fi
 if [[ -n "${discordWebhook}" ]]; then
@@ -970,7 +1003,7 @@ if [[ -n "${discordWebhook}" ]]; then
         printOutput "4" "- ${i}"
     done
     eventText="**Plex metadata update for ${serverName}**${lineBreak}$(printf '%s\n' "${msgArr[@]}")"
-    printOutput "3" "Sending Discord messages"
+    printOutput "4" "Sending Discord messages"
     sendDiscordMessage "${eventText}"
 fi
 
