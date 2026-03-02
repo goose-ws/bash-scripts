@@ -10,21 +10,19 @@
 #############################
 ##          About          ##
 #############################
-# This script will update a DNS record via Linode's DNS manager. Main use case is keeping a dynamic
-# DNS record updated.
+# This script will update a DNS record via Linode's DNS manager.
+# Main use case is keeping a dynamic DNS record updated.
 
 #############################
 ##        Changelog        ##
 #############################
+# 2026-02-28
+# Added Apprise notification support
+# Added regex validation for IP address fetching
+# Added dynamic record creation and stale record deletion
+# Made IP lookup URL configurable
 # 2026-02-23
 # Fixed IPv6 support
-# 2024-01-27
-# Improved some sanity checks and logic for escape scenarioes
-# Added support for when a container has multiple networks attached (Multiple IP addresses)
-# Updated the logic for sending Telegram messages to make sure the bot can authenticate to each channel
-# Added support for super groups, silent messages (See updated .env file)
-# Added support for sending error messages via telegram (See updated .env file)
-# Initial commit, more or less a total rewrite
 
 #############################
 ##       Installation      ##
@@ -45,17 +43,17 @@ if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt "4" ]]; then
     echo "This script requires Bash version 4 or greater"
     exit 255
 fi
-depArr=("awk" "curl" "md5sum" "printf" "rm")
+depArr=("awk" "curl" "md5sum" "printf" "rm" "jq")
 depFail="0"
 for i in "${depArr[@]}"; do
     if [[ "${i:0:1}" == "/" ]]; then
         if ! [[ -e "${i}" ]]; then
-            echo "${i}\\tnot found"
+            echo -e "${i}\tnot found"
             depFail="1"
         fi
     else
         if ! command -v "${i}" > /dev/null 2>&1; then
-            echo "${i}\\tnot found"
+            echo -e "${i}\tnot found"
             depFail="1"
         fi
     fi
@@ -128,9 +126,6 @@ exit 0
 }
 
 function sendTelegramMessage {
-# Message to send should be passed as function positional parameter #1
-# We can pass an "Admin channel" as positional parameter #2 for the case of sending error messages
-# Let's check to make sure our messaging credentials are valid
 skipTelegram="0"
 telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getMe" 2>&1)"
 curlExitCode="${?}"
@@ -152,7 +147,7 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
             if [[ -n "${2}" ]]; then
                 chanId="${2}"
             fi
-            telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${telegramChannelId}")"
+            telegramOutput="$(curl -skL "https://api.telegram.org/bot${telegramBotId}/getChat?chat_id=${chanId}")"
             curlExitCode="${?}"
             if [[ "${curlExitCode}" -ne "0" ]]; then
                 printOutput "1" "Curl to Telegram to check channel returned a non-zero exit code: ${curlExitCode}"
@@ -171,12 +166,9 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
                     printOutput "1" "Curl to Telegram to send message returned an empty string"
                 else
                     printOutput "3" "Curl exit code and null output checks passed"
-                    # Check to make sure Telegram returned a true value for ok
                     if ! [[ "$(jq -M -r ".ok" <<<"${telegramOutput}")" == "true" ]]; then
                         printOutput "1" "Failed to send Telegram message:"
-                        printOutput "1" ""
                         printOutput "1" "$(jq . <<<"${telegramOutput}")"
-                        printOutput "1" ""
                     else
                         printOutput "2" "Telegram message sent successfully"
                     fi
@@ -192,8 +184,21 @@ if [[ "${skipTelegram}" -eq "0" ]]; then
 fi
 }
 
+function sendAppriseMessage {
+if [[ -n "${appriseUrl}" ]]; then
+    local payload
+    payload="$(jq -n --arg body "${1}" --arg title "Dynamic DNS Update" '{title: $title, body: $body}')"
+    appriseOutput="$(curl -skL -X POST -H "Content-Type: application/json" -d "${payload}" "${appriseUrl}" 2>&1)"
+    curlExitCode="${?}"
+    if [[ "${curlExitCode}" -ne "0" ]]; then
+        printOutput "1" "Curl to Apprise returned a non-zero exit code: ${curlExitCode}"
+    else
+        printOutput "2" "Apprise message sent successfully"
+    fi
+fi
+}
+
 function callCurl {
-# URL to call should be $1
 curlOutput="$(curl -skL -H "Authorization: Bearer ${apiKey}" "${1}" 2>&1)"
 curlExitCode="${?}"
 if [[ "${curlExitCode}" -ne "0" ]]; then
@@ -206,10 +211,6 @@ fi
 }
 
 #############################
-##     Unique Functions    ##
-#############################
-
-#############################
 ##       Signal Traps      ##
 #############################
 trap "badExit SIGINT" INT
@@ -219,7 +220,6 @@ trap "badExit SIGKILL" KILL
 #############################
 ##  Positional parameters  ##
 #############################
-# We can run the positional parameter options without worrying about lockFile
 case "${1,,}" in
     "-h"|"--help")
         echo "-h  --help      Displays this help message"
@@ -227,7 +227,7 @@ case "${1,,}" in
         echo "-u  --update    Self update to the most recent version"
         exit 0
     ;;
-    "-u"|"--Update")
+    "-u"|"--update")
         oldStartLine="0"
         while read -r i; do
             if [[ "${i}" == "##        Changelog        ##" ]]; then
@@ -259,7 +259,6 @@ case "${1,,}" in
                         newStartLine="1"
                     fi
                 done < <(curl -skL "${updateURL}")
-
                 printOutput "1"  "Changelog:"
                 for i in "${changelogArr[@]}"; do
                     printOutput "1"  "${i}"
@@ -283,7 +282,6 @@ else
     badExit "4" "Error: \"${realPath%/*}/${scriptName%.bash}.env\" does not appear to exist"
 fi
 varFail="0"
-# Standard checks
 if ! [[ "${updateCheck,,}" =~ ^(yes|no|true|false)$ ]]; then
     echo "Option to check for updates not valid. Assuming no."
     updateCheck="No"
@@ -292,8 +290,12 @@ if ! [[ "${outputVerbosity}" =~ ^[1-5]$ ]]; then
     echo "Invalid output verbosity defined. Assuming level 1 (Errors only)"
     outputVerbosity="1"
 fi
-
-# Config specific checks
+if [[ -z "${ipCheckUrl}" ]]; then
+    ipCheckUrl="https://icanhazip.com"
+fi
+if ! [[ "${defaultTtl}" =~ ^[0-9]+$ ]]; then
+    defaultTtl="300"
+fi
 if ! [[ "${apiKey}" =~ ^[[:alnum:]]+$ ]]; then
     printOutput "1" "API key appears to be invalid (Characters other than letters/numbers)"
     varFail="1"
@@ -309,8 +311,6 @@ else
         fi
     done
 fi
-
-# Quit if failures
 if [[ "${varFail}" -eq "1" ]]; then
     badExit "5" "Please fix above errors"
 fi
@@ -322,9 +322,7 @@ if [[ "${updateCheck,,}" =~ ^(yes|true)$ ]]; then
     newest="$(curl -skL "${updateURL}" | md5sum | awk '{print $1}')"
     current="$(md5sum "${0}" | awk '{print $1}')"
     if ! [[ "${newest}" == "${current}" ]]; then
-        # Although it's not an error, we should always be allowed to print this message if update checks are allowed, so giving it priority 1
         printOutput "1" "A newer version is available"
-        # If our ${TERM} is dumb, we're probably running via cron, and should push a message to Telegram, if allowed
         if [[ "${TERM,,}" == "dumb" ]]; then
             if [[ "${telegramErrorMessages}" =~ ^(yes|true)$ ]]; then
                 sendTelegramMessage "An updated version of \"${0##*/}\" is available" "${telegramErrorChannel}"
@@ -338,32 +336,40 @@ fi
 #############################
 ##         Payload         ##
 #############################
-# First thing's first, do we have internet?
 printOutput "2" "Verifying internet connectivity"
 if ! ping -w 5 -c 1 "api.linode.com" > /dev/null 2>&1; then
-    # It appears not
     badExit "6" "Internet appears to be offline"
 else
     printOutput "3" "Internet connectivity verified"
 fi
 
-# Get our addresses
-v4addr="$(curl -skL4 "https://icanhazip.com" 2>&1)"
+# Get our addresses with Regex checks
+v4addr="$(curl -skL4 "${ipCheckUrl}" 2>&1)"
 if [[ -n "${v4addr}" ]]; then
-    printOutput "3" "Detected assigned IPv4 address: ${v4addr}"
+    if [[ "${v4addr}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+        printOutput "3" "Detected assigned IPv4 address: ${v4addr}"
+    else
+        printOutput "1" "Retrieved IPv4 address is invalid: ${v4addr}"
+        unset v4addr
+    fi
 else
     printOutput "3" "No assigned IPv4 address detected"
 fi
 
-v6addr="$(curl -skL6 "https://icanhazip.com" 2>&1)"
+v6addr="$(curl -skL6 "${ipCheckUrl}" 2>&1)"
 if [[ -n "${v6addr}" ]]; then
-    printOutput "3" "Detected assigned IPv6 address: ${v6addr}"
+    if [[ "${v6addr}" =~ ^[0-9a-fA-F:]+$ && "${v6addr}" == *":"*":"* ]]; then
+        printOutput "3" "Detected assigned IPv6 address: ${v6addr}"
+    else
+        printOutput "1" "Retrieved IPv6 address is invalid: ${v6addr}"
+        unset v6addr
+    fi
 else
     printOutput "3" "No assigned IPv6 address detected"
 fi
 
 if [[ -z "${v4addr}" && -z "${v6addr}" ]]; then
-    badExit "7" "Unable to determine local IPv4 and IPv6 address (Is https://icanhazip.com down?)"
+    badExit "7" "Unable to determine local IPv4 and IPv6 address (Is ${ipCheckUrl} down?)"
 fi
 
 # Get the available domains
@@ -389,7 +395,6 @@ fi
 
 for i in "${recordNames[@]}"; do
     printOutput "2" "Processing: ${i}"
-    # Start by figuring out which domain we're working with
     for ii in "${!domains[@]}"; do
         iiEscaped="${domains[${ii}]//\./\\.}"
         if [[ "${i}" =~ ^.*\.${iiEscaped} ]]; then
@@ -398,9 +403,8 @@ for i in "${recordNames[@]}"; do
             break
         fi
     done
-    # We have the ID of the domain we need, now let's get the record ID for it
+    
     callCurl "https://api.linode.com/v4/domains/${ii}/records/"
-    # Set this to a different variable so we can preserve it
     recordsOutput="${curlOutput}"
     searchName="${i%.${domains[${ii}]}}"
     unset aRecords aaaaRecords
@@ -408,18 +412,43 @@ for i in "${recordNames[@]}"; do
     printOutput "4" "Found [${#aRecords[@]}] A records [${aRecords[*]}]"
     readarray -t aaaaRecords < <(jq -M -r " .data[] | select((.name == \"${searchName}\") and (.type == \"AAAA\")) | .id" <<<"${recordsOutput}")
     printOutput "4" "Found [${#aaaaRecords[@]}] AAAA records [${aaaaRecords[*]}]"
-    if [[ "$(( ${#aRecords[@]} + ${#aaaaRecords[@]} ))" -eq "0" ]]; then
-        badExit "11" "No A or AAAA records detected"
-    fi
+    
     if [[ "${#aRecords[@]}" -gt "1" ]]; then
         badExit "12" "Found multiple A record(s) (${#aRecords[@]} matches, ID's: ${aRecords[*]})"
     fi
     if [[ "${#aaaaRecords[@]}" -gt "1" ]]; then
         badExit "13" "Found multiple AAAA record(s) (${#aaaaRecords[@]} matches, ID's: ${aaaaRecords[*]})"
     fi
-    # Update our IPv4 record, if our v4 address and our v4 record is not empty
-    if [[ -n "${v4addr}" && -n "${aRecords[0]}" ]]; then
-        # Using an array here as a cheap way of making sure we only ended up with one target
+
+    # Process IPv4 (A records)
+    if [[ "${v4status}" == "skip" ]]; then
+        printOutput "2" "Skipping IPv4 processing due to lookup failure."
+    elif [[ "${v4status}" == "valid" && "${#aRecords[@]}" -eq "0" ]]; then
+        printOutput "2" "No A record found. Creating new A record targeting ${v4addr}"
+        createRequest="$(curl -skL -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" \
+        -X POST -d "{
+        \"type\": \"A\",
+        \"name\": \"${searchName}\",
+        \"target\": \"${v4addr}\",
+        \"ttl_sec\": ${defaultTtl}
+        }" "https://api.linode.com/v4/domains/${ii}/records" 2>&1)"
+        if jq -e .id >/dev/null 2>&1 <<<"${createRequest}"; then
+            printOutput "2" "Successfully created A record for ${searchName}.${domains[${ii}]} targeting ${v4addr}"
+            msgArr+=("A record for ${searchName}.${domains[${ii}]} created targeting ${v4addr}")
+        else
+            printOutput "1" "Failed to create A record: ${createRequest}"
+        fi
+    elif [[ "${v4status}" == "missing" && "${#aRecords[@]}" -gt "0" ]]; then
+        printOutput "2" "No local IPv4 address found, but A record exists. Deleting stale A record."
+        deleteRequest="$(curl -skL -H "Authorization: Bearer ${apiKey}" \
+        -X DELETE "https://api.linode.com/v4/domains/${ii}/records/${aRecords[0]}" 2>&1)"
+        if [[ -z "${deleteRequest}" || "${deleteRequest}" == "{}" ]]; then
+            printOutput "2" "Successfully deleted stale A record for ${searchName}.${domains[${ii}]}"
+            msgArr+=("Stale A record for ${searchName}.${domains[${ii}]} deleted")
+        else
+            printOutput "1" "Failed to delete A record: ${deleteRequest}"
+        fi
+    elif [[ "${v4status}" == "valid" && -n "${aRecords[0]}" ]]; then
         unset targetAddr
         readarray -t targetAddr < <(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .target" <<<"${recordsOutput}")
         if [[ "${#targetAddr[@]}" -gt "1" ]]; then
@@ -428,30 +457,20 @@ for i in "${recordNames[@]}"; do
             printOutput "2" "Existing target address: ${targetAddr[0]}"
             printOutput "3" "Record ID: ${aRecords[0]}"
         fi
+        
         if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
-            # Our addresses match, we can break this loop
-            printOutput "2" "Assigned IPv4 address matches DNS record, skipping"
+            printOutput "2" "Assigned IPv4 address matches DNS record, skipping update"
         else
-            # If we've made it this far, our addresses do not match
             printOutput "2" "Assigned IPv4 address does not match DNS record, issuing update"
-            # Get the rest of the data we need to generate the request
-            # name
             targetName="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .name" <<<"${recordsOutput}")"
-            # priority
             targetPriority="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .priority" <<<"${recordsOutput}")"
-            # weight
             targetWeight="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .weight" <<<"${recordsOutput}")"
-            # port
             targetPort="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .port" <<<"${recordsOutput}")"
-            # service
             targetService="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .service" <<<"${recordsOutput}")"
-            # protocol
             targetProtocol="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .protocol" <<<"${recordsOutput}")"
-            # ttl_sec
             targetTtl="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .ttl_sec" <<<"${recordsOutput}")"
-            # tag
             targetTag="$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .tag" <<<"${recordsOutput}")"
-            # Send a request to update the record
+            
             updateRequest="$(curl -skL -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" \
             -X PUT -d "{
             \"type\": \"A\",
@@ -465,38 +484,54 @@ for i in "${recordNames[@]}"; do
             \"ttl_sec\": ${targetTtl},
             \"tag\": ${targetTag}
             }" "https://api.linode.com/v4/domains/${ii}/records/${aRecords[0]}" 2>&1)"
+            
             curlExitCode="${?}"
             if [[ "${curlExitCode}" -ne "0" ]]; then
                 printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
-                while read i; do
-                    printOutput "1" "Output: ${i}"
-                done <<<"${curlOutput}"
                 badExit "15" "Bad curl output"
             fi
-            if [[ "$(jq -M -r ".data[] | select(.id == ${aRecords[0]}) | .target" <<<"${curlOutput}")" == "${targetAddr[0]}" ]]; then
-                # Our call was issued successfully, sleep for 1 second then check the record
-                sleep 1
-                oldTargetAddr="${targetAddr[0]}"
-                unset targetAddr
-                callCurl "https://api.linode.com/v4/domains/${ii}/records/${aRecords[0]}"
-                readarray -t targetAddr < <(jq -M -r ".target" <<<"${curlOutput}")
-                if [[ "${#targetAddr[@]}" -gt "1" ]]; then
-                    badExit "16" "Matched too many target addresses"
-                fi
-                if [[ "${targetAddr[0]}" == "${v4addr}" ]]; then
-                    printOutput "2" "A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}"
-                    msgArr+=("A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}")
-                else
-                    printOutput "1" "A record for ${targetName}.${domains[${ii}]} failed to update from ${oldTargetAddr} to ${targetAddr[0]}"
-                    msgArr+=("A record for ${targetName}.${domains[${ii}]} failed to update from ${oldTargetAddr} to ${targetAddr[0]}")
-                fi
+            
+            if [[ "$(jq -M -r ".target" <<<"${updateRequest}")" == "${v4addr}" ]]; then
+                printOutput "2" "A record for ${targetName}.${domains[${ii}]} successfully updated from ${targetAddr[0]} to ${v4addr}"
+                msgArr+=("A record for ${targetName}.${domains[${ii}]} successfully updated from ${targetAddr[0]} to ${v4addr}")
+            else
+                printOutput "1" "A record for ${targetName}.${domains[${ii}]} failed to update"
+                msgArr+=("A record for ${targetName}.${domains[${ii}]} failed to update")
             fi
         fi
     else
-        printOutput "2" "Skipping IPv4"
+        printOutput "2" "Skipping IPv4 (No address detected and no existing record)"
     fi
-    if [[ -n "${v6addr}" && -n "${aaaaRecords[0]}" ]]; then
-        # Using an array here as a cheap way of making sure we only ended up with one target
+
+    # Process IPv6 (AAAA records)
+    if [[ "${v6status}" == "skip" ]]; then
+        printOutput "2" "Skipping IPv6 processing due to lookup failure."
+    elif [[ "${v6status}" == "valid" && "${#aaaaRecords[@]}" -eq "0" ]]; then
+        printOutput "2" "No AAAA record found. Creating new AAAA record targeting ${v6addr}"
+        createRequest="$(curl -skL -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" \
+        -X POST -d "{
+        \"type\": \"AAAA\",
+        \"name\": \"${searchName}\",
+        \"target\": \"${v6addr}\",
+        \"ttl_sec\": ${defaultTtl}
+        }" "https://api.linode.com/v4/domains/${ii}/records" 2>&1)"
+        if jq -e .id >/dev/null 2>&1 <<<"${createRequest}"; then
+            printOutput "2" "Successfully created AAAA record for ${searchName}.${domains[${ii}]} targeting ${v6addr}"
+            msgArr+=("AAAA record for ${searchName}.${domains[${ii}]} created targeting ${v6addr}")
+        else
+            printOutput "1" "Failed to create AAAA record: ${createRequest}"
+        fi
+    elif [[ "${v6status}" == "missing" && "${#aaaaRecords[@]}" -gt "0" ]]; then
+        printOutput "2" "No local IPv6 address found, but AAAA record exists. Deleting stale AAAA record."
+        deleteRequest="$(curl -skL -H "Authorization: Bearer ${apiKey}" \
+        -X DELETE "https://api.linode.com/v4/domains/${ii}/records/${aaaaRecords[0]}" 2>&1)"
+        if [[ -z "${deleteRequest}" || "${deleteRequest}" == "{}" ]]; then
+            printOutput "2" "Successfully deleted stale AAAA record for ${searchName}.${domains[${ii}]}"
+            msgArr+=("Stale AAAA record for ${searchName}.${domains[${ii}]} deleted")
+        else
+            printOutput "1" "Failed to delete AAAA record: ${deleteRequest}"
+        fi
+    elif [[ "${v6status}" == "valid" && -n "${aaaaRecords[0]}" ]]; then
         unset targetAddr
         readarray -t targetAddr < <(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .target" <<<"${recordsOutput}")
         if [[ "${#targetAddr[@]}" -gt "1" ]]; then
@@ -504,30 +539,20 @@ for i in "${recordNames[@]}"; do
         else
             printOutput "3" "[ID: ${aaaaRecords[0]}] Target address: ${targetAddr[0]}"
         fi
+        
         if [[ "${targetAddr[0]}" == "${v6addr}" ]]; then
-            # Our addresses match, we can break this loop
-            printOutput "2" "Assigned IPv6 address matches DNS record, skipping"
+            printOutput "2" "Assigned IPv6 address matches DNS record, skipping update"
         else
-            # If we've made it this far, our addresses do not match
             printOutput "2" "Assigned IPv6 address does not match DNS record, issuing update"
-            # Get the rest of the data we need to generate the request
-            # name
             targetName="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .name" <<<"${recordsOutput}")"
-            # priority
             targetPriority="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .priority" <<<"${recordsOutput}")"
-            # weight
             targetWeight="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .weight" <<<"${recordsOutput}")"
-            # port
             targetPort="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .port" <<<"${recordsOutput}")"
-            # service
             targetService="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .service" <<<"${recordsOutput}")"
-            # protocol
             targetProtocol="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .protocol" <<<"${recordsOutput}")"
-            # ttl_sec
             targetTtl="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .ttl_sec" <<<"${recordsOutput}")"
-            # tag
             targetTag="$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .tag" <<<"${recordsOutput}")"
-            # Send a request to update the record
+            
             updateRequest="$(curl -skL -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" \
             -X PUT -d "{
             \"type\": \"AAAA\",
@@ -541,44 +566,42 @@ for i in "${recordNames[@]}"; do
             \"ttl_sec\": ${targetTtl},
             \"tag\": ${targetTag}
             }" "https://api.linode.com/v4/domains/${ii}/records/${aaaaRecords[0]}" 2>&1)"
+            
             curlExitCode="${?}"
             if [[ "${curlExitCode}" -ne "0" ]]; then
                 printOutput "1" "Curl returned non-zero exit code ${curlExitCode}"
-                while read i; do
-                    printOutput "1" "Output: ${i}"
-                done <<<"${curlOutput}"
                 badExit "18" "Bad curl output"
             fi
-            if [[ "$(jq -M -r ".data[] | select(.id == ${aaaaRecords[0]}) | .target" <<<"${curlOutput}")" == "${targetAddr[0]}" ]]; then
-                # Our call was issued successfully, sleep for 1 second then check the record
-                sleep 1
-                oldTargetAddr="${targetAddr[0]}"
-                unset targetAddr
-                callCurl "https://api.linode.com/v4/domains/${ii}/records/${aaaaRecords[0]}"
-                readarray -t targetAddr < <(jq -M -r ".target" <<<"${curlOutput}")
-                if [[ "${#targetAddr[@]}" -gt "1" ]]; then
-                    badExit "19" "Matched too many target addresses"
-                fi
-                if [[ "${targetAddr[0]}" == "${v6addr}" ]]; then
-                    printOutput "2" "A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}"
-                    msgArr+=("A record for ${targetName}.${domains[${ii}]} successfully updated from ${oldTargetAddr} to ${targetAddr[0]}")
-                else
-                    printOutput "1" "A record for ${targetName}.${domains[${ii}]} failed to update from ${oldTargetAddr} to ${targetAddr[0]}"
-                    msgArr+=("A record for ${targetName}.${domains[${ii}]} failed to update from ${oldTargetAddr} to ${targetAddr[0]}")
-                fi
+            
+            if [[ "$(jq -M -r ".target" <<<"${updateRequest}")" == "${v6addr}" ]]; then
+                printOutput "2" "AAAA record for ${targetName}.${domains[${ii}]} successfully updated from ${targetAddr[0]} to ${v6addr}"
+                msgArr+=("AAAA record for ${targetName}.${domains[${ii}]} successfully updated from ${targetAddr[0]} to ${v6addr}")
+            else
+                printOutput "1" "AAAA record for ${targetName}.${domains[${ii}]} failed to update"
+                msgArr+=("AAAA record for ${targetName}.${domains[${ii}]} failed to update")
             fi
         fi
     else
-        printOutput "2" "Skipping IPv6"
+        printOutput "2" "Skipping IPv6 (No address detected and no existing record)"
     fi
 done
 
-# Send Telegram message here
-if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" && -n "${msgArr[@]}" ]]; then
-    sendTelegramMessage "${msgArr[@]}"
+# Send Telegram and Apprise messages here
+if [[ "${#msgArr[@]}" -gt "0" ]]; then
+    # Convert message array to a newline-separated string
+    msgString="$(printf "%s\n" "${msgArr[@]}")"
+    
+    if [[ -n "${telegramBotId}" && -n "${telegramChannelId[0]}" ]]; then
+        sendTelegramMessage "${msgString}"
+    fi
+    
+    if [[ -n "${appriseUrl}" ]]; then
+        sendAppriseMessage "${msgString}"
+    fi
 fi
 
 #############################
 ##       End of file       ##
 #############################
 cleanExit
+
