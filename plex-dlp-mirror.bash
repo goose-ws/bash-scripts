@@ -191,7 +191,7 @@ if [[ -z "${2}" ]]; then
     exit "255"
 else
     if [[ "${telegramErrorMessages,,}" =~ ^(yes|true)$ ]]; then
-        sendTelegramMessage "<b>${0##*/}</b>${lineBreak}${lineBreak}Error Code ${1}:${lineBreak}${2}" "${telegramErrorChannel}"
+        sendTelegramMessage "${telegramErrorChannel}" "<b>${0##*/}</b>${lineBreak}${lineBreak}Error Code ${1}:${lineBreak}${2}"
     fi
     printOutput "1" "${2} [Error code: ${1}]"
     exit "1"
