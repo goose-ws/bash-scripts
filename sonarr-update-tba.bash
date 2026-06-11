@@ -35,6 +35,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-06-11
+# Added a pre-rename metadata check to skip rename commands if the episode title is still TBA/TBD
+# Added an escape condition for "failed" task statuses in the API polling loops to prevent the script from hanging
 # 2026-02-23
 # Updated output verbosity levels
 # 2025-07-06
@@ -911,6 +914,9 @@ for containerName in "${containerIp[@]}"; do
                         if [[ "${commandStatus,,}" == "completed" ]]; then
                             printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
                             break
+                        elif [[ "${commandStatus,,}" == "failed" ]]; then
+                            printOutput "2" "Command status [${commandId}]: failed - aborting wait"
+                            break
                         else
                             printOutput "4" "Command status [${commandId}]: ${commandStatus,,}"
                         fi
@@ -924,6 +930,19 @@ for containerName in "${containerIp[@]}"; do
                     sleep 15
                 fi
             fi
+            
+            # Fetch the updated episode metadata to verify it is no longer TBA/TBD
+            printOutput "4" "Verifying episode title has updated from TBA/TBD in Sonarr"
+            currentEpData="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiEpisode}?seriesId=${seriesId[0]}&seasonNumber=${fileSeasonNum}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json")"
+            currentEpTitle="$(jq -M -r ".[] | select(.episodeNumber==${fileEpisodeNum}) | .title" <<<"${currentEpData}")"
+
+            if [[ -z "${currentEpTitle}" || "${currentEpTitle,,}" == "tba" || "${currentEpTitle,,}" == "tbd" || "${currentEpTitle,,}" =~ ^episode[[:space:]]+[0-9]+$ ]]; then
+                printOutput "3" "Metadata for ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}] is still ${currentEpTitle} -- Skipping rename"
+                continue
+            fi
+
+            # Rename the specific episode
+            printOutput "3" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
 
             # Rename the specific episode
             printOutput "3" "Issuing rename command for: ${seriesTitle} [S${fileSeasonNum}E${fileEpisodeNum}]"
@@ -938,15 +957,18 @@ for containerName in "${containerIp[@]}"; do
             printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
             if ! [[ "${commandStatus,,}" == "completed" ]]; then
                 while [[ -n "${commandStatus}" ]]; do
-                    if [[ "${commandStatus,,}" == "completed" ]]; then
-                        printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
-                        break
-                    else
-                        printOutput "4" "Command status [${commandId}]: ${commandStatus,,}"
-                    fi
-                    sleep 1
-                    commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
-                done
+                        if [[ "${commandStatus,,}" == "completed" ]]; then
+                            printOutput "3" "Command status [${commandId}]: ${commandStatus,,}"
+                            break
+                        elif [[ "${commandStatus,,}" == "failed" ]]; then
+                            printOutput "2" "Command status [${commandId}]: failed - aborting wait"
+                            break
+                        else
+                            printOutput "4" "Command status [${commandId}]: ${commandStatus,,}"
+                        fi
+                        sleep 1
+                        commandStatus="$(curl -skL "${containerIp}:${sonarrPort}${sonarrUrlBase}${apiCommand}" -H "X-api-key: ${sonarrApiKey}" -H "Content-Type: application/json" -H "Accept: application/json" | jq -M -r ".[] | select(.id == ${commandId}) | .status")"
+                    done
             fi
             if [[ -z "${commandStatus}" ]]; then
                 printOutput "2" "Unable to retrieve command ID ${commandId} from command log"
