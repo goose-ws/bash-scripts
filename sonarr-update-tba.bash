@@ -35,6 +35,9 @@
 #############################
 ##        Changelog        ##
 #############################
+# 2026-06-11
+# Added a pre-rename metadata check to skip rename commands if the episode title is still TBA/TBD
+# Added an escape condition for "failed" task statuses in the API polling loops to prevent the script from hanging
 # 2026-02-23
 # Updated output verbosity levels
 # 2025-07-06
